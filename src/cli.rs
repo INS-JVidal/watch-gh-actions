@@ -24,4 +24,8 @@ pub struct Cli {
     /// Filter to a specific workflow name
     #[arg(short, long)]
     pub workflow: Option<String>,
+
+    /// Disable desktop notifications
+    #[arg(long)]
+    pub no_notify: bool,
 }

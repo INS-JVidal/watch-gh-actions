@@ -201,6 +201,9 @@ pub struct AppState {
     // Log overlay
     pub log_cache: HashMap<(u64, Option<u64>), FailedLog>,
     pub log_overlay: Option<LogOverlay>,
+
+    // Desktop notifications
+    pub desktop_notify: bool,
 }
 
 impl AppState {
@@ -234,6 +237,7 @@ impl AppState {
             should_quit: false,
             log_cache: HashMap::new(),
             log_overlay: None,
+            desktop_notify: true,
         }
     }
 

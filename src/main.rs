@@ -4,6 +4,7 @@ use ghw::diff;
 use ghw::events;
 use ghw::gh;
 use ghw::input;
+use ghw::notify;
 use ghw::tui;
 
 use app::AppState;
@@ -53,6 +54,7 @@ async fn main() -> Result<()> {
     let mut state = AppState::new(repo.clone(), branch, args.limit, args.workflow.clone());
     state.poll_interval = args.interval;
     state.is_loading = true;
+    state.desktop_notify = !args.no_notify;
 
     // Setup terminal with panic hook
     let original_hook = std::panic::take_hook();
@@ -279,7 +281,26 @@ async fn run_app(
                 AppEvent::PollResult(new_runs) => {
                     state.is_loading = false;
                     state.clear_error();
+
+                    let old_snapshot = if state.desktop_notify {
+                        Some(state.previous_snapshot.clone())
+                    } else {
+                        None
+                    };
+
                     diff::detect_changes(state, &new_runs);
+
+                    if let Some(old_snapshot) = old_snapshot {
+                        for run in &new_runs {
+                            if run.status == app::RunStatus::Completed {
+                                if let Some(&(old_status, _)) = old_snapshot.get(&run.database_id) {
+                                    if old_status != app::RunStatus::Completed {
+                                        notify::send_desktop(run);
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     // Preserve jobs data for runs that already had them
                     let mut runs = new_runs;
