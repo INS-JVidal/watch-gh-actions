@@ -1,0 +1,13 @@
+#!/bin/sh
+
+BUILD_FILE="BUILD_NUMBER"
+
+if [ -f "$BUILD_FILE" ]; then
+    current=$(cat "$BUILD_FILE" | tr -d '[:space:]')
+else
+    current=0
+fi
+
+next=$((current + 1))
+echo "$next" > "$BUILD_FILE"
+git add "$BUILD_FILE"

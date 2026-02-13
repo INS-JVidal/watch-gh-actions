@@ -1,0 +1,32 @@
+#!/bin/sh
+
+remote="$1"
+branch=$(git symbolic-ref --short HEAD)
+
+# Pull any remote changes (e.g. CI MINOR bumps)
+git pull --rebase --no-verify "$remote" "$branch" 2>/dev/null
+
+# Parse current version from Cargo.toml
+current=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+major=$(echo "$current" | cut -d. -f1)
+minor=$(echo "$current" | cut -d. -f2)
+patch=$(echo "$current" | cut -d. -f3)
+
+# Bump patch
+new_patch=$((patch + 1))
+new_version="$major.$minor.$new_patch"
+
+sed -i "s/^version = \"$current\"/version = \"$new_version\"/" Cargo.toml
+git add Cargo.toml
+git commit --no-verify -m "chore: bump patch to $new_version"
+
+# Push (including the version bump commit)
+git push --no-verify "$remote" "$branch"
+push_status=$?
+
+if [ $push_status -eq 0 ]; then
+    echo "Pushed with patch bump: $current -> $new_version"
+fi
+
+# Cancel the original push (we already pushed)
+exit 1
