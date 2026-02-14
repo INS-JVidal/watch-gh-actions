@@ -61,24 +61,28 @@ pub fn render(f: &mut Frame, area: Rect, state: &AppState) {
                 .is_some_and(|r| r.database_id == n.run_id)
         });
 
-        let line = match state.resolve_item(item) {
-            Some(ResolvedItem::Run(run)) => {
-                let vis_idx = run_visual_idx.get(&item.run_idx).copied().unwrap_or(0);
-                render_run_line(
-                    run,
-                    vis_idx,
-                    is_selected,
-                    has_notification,
-                    narrow,
-                    inner_width,
-                    item.expanded,
-                )
+        let line = if item.level == TreeLevel::Loading {
+            render_loading_line(state.spinner_frame, is_selected)
+        } else {
+            match state.resolve_item(item) {
+                Some(ResolvedItem::Run(run)) => {
+                    let vis_idx = run_visual_idx.get(&item.run_idx).copied().unwrap_or(0);
+                    render_run_line(
+                        run,
+                        vis_idx,
+                        is_selected,
+                        has_notification,
+                        narrow,
+                        inner_width,
+                        item.expanded,
+                    )
+                }
+                Some(ResolvedItem::Job(job)) => {
+                    render_job_line(job, is_selected, narrow, inner_width, item.expanded)
+                }
+                Some(ResolvedItem::Step(step)) => render_step_line(step, is_selected, inner_width),
+                None => Line::raw(""),
             }
-            Some(ResolvedItem::Job(job)) => {
-                render_job_line(job, is_selected, narrow, inner_width, item.expanded)
-            }
-            Some(ResolvedItem::Step(step)) => render_step_line(step, is_selected, inner_width),
-            None => Line::raw(""),
         };
         lines.push(line);
     }
@@ -266,6 +270,22 @@ fn render_step_line(step: &crate::app::Step, is_selected: bool, max_width: usize
     Line::from(vec![
         Span::styled(prefix, Style::default().fg(icon_color)),
         Span::styled(name, select_style),
+    ])
+}
+
+fn render_loading_line(spinner_frame: usize, is_selected: bool) -> Line<'static> {
+    let spinner_char = crate::tui::spinner::frame(spinner_frame);
+    let select_style = if is_selected {
+        Style::default().add_modifier(Modifier::REVERSED)
+    } else {
+        Style::default()
+    };
+    Line::from(vec![
+        Span::styled(
+            format!("    {} ", spinner_char),
+            Style::default().fg(Color::Yellow),
+        ),
+        Span::styled("Loading…", select_style.fg(Color::DarkGray)),
     ])
 }
 

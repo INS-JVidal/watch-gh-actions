@@ -102,6 +102,7 @@ pub enum TreeLevel {
     Run,
     Job,
     Step,
+    Loading,
 }
 
 #[derive(Debug, Clone)]
@@ -133,6 +134,7 @@ impl AppState {
                 let step = job.steps.get(item.step_idx?)?;
                 Some(ResolvedItem::Step(step))
             }
+            TreeLevel::Loading => None,
         }
     }
 }
@@ -257,26 +259,34 @@ impl AppState {
                 expanded: run_expanded,
             });
             if run_expanded {
-                for (job_idx, _job) in run.jobs.iter().enumerate() {
-                    let job_expanded = self.expanded_jobs.contains(&(run_id, job_idx));
+                if !run.jobs_fetched {
                     items.push(TreeItem {
-                        level: TreeLevel::Job,
+                        level: TreeLevel::Loading,
                         run_idx: *run_idx,
-                        job_idx: Some(job_idx),
+                        job_idx: None,
                         step_idx: None,
-        
-                        expanded: job_expanded,
+                        expanded: false,
                     });
-                    if job_expanded {
-                        for (step_idx, _step) in run.jobs[job_idx].steps.iter().enumerate() {
-                            items.push(TreeItem {
-                                level: TreeLevel::Step,
-                                run_idx: *run_idx,
-                                job_idx: Some(job_idx),
-                                step_idx: Some(step_idx),
-
-                                expanded: false,
-                            });
+                } else {
+                    for (job_idx, _job) in run.jobs.iter().enumerate() {
+                        let job_expanded = self.expanded_jobs.contains(&(run_id, job_idx));
+                        items.push(TreeItem {
+                            level: TreeLevel::Job,
+                            run_idx: *run_idx,
+                            job_idx: Some(job_idx),
+                            step_idx: None,
+                            expanded: job_expanded,
+                        });
+                        if job_expanded {
+                            for (step_idx, _step) in run.jobs[job_idx].steps.iter().enumerate() {
+                                items.push(TreeItem {
+                                    level: TreeLevel::Step,
+                                    run_idx: *run_idx,
+                                    job_idx: Some(job_idx),
+                                    step_idx: Some(step_idx),
+                                    expanded: false,
+                                });
+                            }
                         }
                     }
                 }
@@ -363,6 +373,7 @@ impl AppState {
                     }
                 }
                 TreeLevel::Step => {}
+                TreeLevel::Loading => {}
             }
             self.rebuild_tree();
         }
@@ -392,6 +403,7 @@ impl AppState {
                     }
                 }
                 TreeLevel::Step => {}
+                TreeLevel::Loading => {}
             }
         }
         None
@@ -445,6 +457,7 @@ impl AppState {
                         }
                     }
                 }
+                TreeLevel::Loading => {}
             }
         }
     }
@@ -598,6 +611,7 @@ impl AppState {
                 let job = run.jobs.get(item.job_idx?)?;
                 Some((run_id, job.database_id))
             }
+            TreeLevel::Loading => None,
         }
     }
 
