@@ -302,15 +302,21 @@ async fn run_app(
                         }
                     }
 
-                    // Preserve jobs data for runs that already had them
+                    // Preserve jobs data for runs that haven't changed
                     let mut runs = new_runs;
+                    let mut refetch_run_ids = Vec::new();
                     for run in &mut runs {
                         if let Some(old) =
                             state.runs.iter().find(|r| r.database_id == run.database_id)
                         {
                             if old.jobs_fetched {
-                                run.jobs = old.jobs.clone();
-                                run.jobs_fetched = true;
+                                if old.updated_at == run.updated_at {
+                                    run.jobs = old.jobs.clone();
+                                    run.jobs_fetched = true;
+                                } else if state.expanded_runs.contains(&run.database_id) {
+                                    // Run changed and is expanded — re-fetch jobs
+                                    refetch_run_ids.push(run.database_id);
+                                }
                             }
                         }
                     }
@@ -318,6 +324,15 @@ async fn run_app(
                     state.rebuild_tree();
                     state.last_poll = Some(Instant::now());
                     poll_start = Instant::now();
+
+                    // Re-fetch jobs for expanded runs whose data has changed
+                    for run_id in refetch_run_ids {
+                        let tx2 = tx.clone();
+                        let repo2 = repo.to_string();
+                        tokio::spawn(async move {
+                            poller::fetch_jobs_for_run(&repo2, run_id, &tx2).await;
+                        });
+                    }
                 }
                 AppEvent::JobsResult { run_id, jobs } => {
                     // Find run by ID (index may have changed)
