@@ -2,7 +2,7 @@ PREFIX ?= $(HOME)/.local
 BINDIR := $(PREFIX)/bin
 BINARY := ghw
 
-.PHONY: build install uninstall clean
+.PHONY: build install uninstall clean clean-runs
 
 build:
 	cargo build --release
@@ -16,3 +16,10 @@ uninstall:
 
 clean:
 	cargo clean
+
+clean-runs:
+	@echo "Deleting workflow runs older than 7 days..."
+	gh run list --repo $(shell gh repo view --json nameWithOwner -q .nameWithOwner) \
+		--limit 100 --json databaseId,createdAt \
+		--jq '[.[] | select(.createdAt < (now - 7*24*3600 | strftime("%Y-%m-%dT%H:%M:%SZ")))] | .[].databaseId' \
+	| xargs -I{} gh run delete {} 2>/dev/null; true
