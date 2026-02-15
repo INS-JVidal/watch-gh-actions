@@ -27,36 +27,7 @@ async fn main() -> Result<()> {
     color_eyre::install()?;
     let args = Cli::parse();
 
-    // Startup validation
-    if let Err(e) = gh::executor::check_gh_available().await {
-        eprintln!("Error: {}", e);
-        std::process::exit(1);
-    }
-
-    // Detect repo
-    let repo = match args.repo {
-        Some(r) => r,
-        None => match gh::executor::detect_repo().await {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                std::process::exit(1);
-            }
-        },
-    };
-
-    // Detect branch
-    let branch = match args.branch {
-        Some(b) => Some(b),
-        None => gh::executor::detect_branch().await.ok(),
-    };
-
-    let mut state = AppState::new(repo.clone(), branch, args.limit, args.workflow.clone());
-    state.poll_interval = args.interval;
-    state.is_loading = true;
-    state.desktop_notify = !args.no_notify;
-
-    // Setup terminal with panic hook
+    // Setup terminal with panic hook early, before any data fetching
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         let _ = terminal::disable_raw_mode();
@@ -70,6 +41,30 @@ async fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
+
+    // Run startup phases with animated spinner
+    let startup_result = match tui::startup::run_startup(&mut terminal, &args).await {
+        Ok(result) => result,
+        Err(e) => {
+            // Restore terminal before printing error
+            terminal::disable_raw_mode()?;
+            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+            terminal.show_cursor()?;
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let repo = startup_result.repo;
+    let branch = startup_result.branch;
+
+    let mut state = AppState::new(repo.clone(), branch, args.limit, args.workflow.clone());
+    state.poll_interval = args.interval;
+    state.is_loading = false;
+    state.desktop_notify = !args.no_notify;
+    state.runs = startup_result.runs;
+    state.rebuild_tree();
+    state.last_poll = Some(Instant::now());
 
     // Event handler
     let events = EventHandler::new(Duration::from_millis(100));
