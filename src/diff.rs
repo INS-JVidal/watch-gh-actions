@@ -97,7 +97,9 @@ mod tests {
         let runs2 = vec![make_run(1, RunStatus::Completed, Some(Conclusion::Success))];
         detect_changes(&mut state, &runs2);
         assert_eq!(state.notifications.len(), 1);
-        assert!(state.notifications[0].message.contains("completed successfully"));
+        assert!(state.notifications[0]
+            .message
+            .contains("completed successfully"));
     }
 
     #[test]
@@ -118,7 +120,11 @@ mod tests {
         let runs1 = vec![make_run(1, RunStatus::InProgress, None)];
         detect_changes(&mut state, &runs1);
 
-        let runs2 = vec![make_run(1, RunStatus::Completed, Some(Conclusion::Cancelled))];
+        let runs2 = vec![make_run(
+            1,
+            RunStatus::Completed,
+            Some(Conclusion::Cancelled),
+        )];
         detect_changes(&mut state, &runs2);
         assert_eq!(state.notifications.len(), 1);
         assert!(state.notifications[0].message.contains("Cancelled"));
@@ -208,7 +214,11 @@ mod tests {
         let runs1 = vec![make_run(42, RunStatus::InProgress, None)];
         detect_changes(&mut state, &runs1);
 
-        let runs2 = vec![make_run(42, RunStatus::Completed, Some(Conclusion::Success))];
+        let runs2 = vec![make_run(
+            42,
+            RunStatus::Completed,
+            Some(Conclusion::Success),
+        )];
         detect_changes(&mut state, &runs2);
         assert_eq!(state.notifications[0].run_id, 42);
     }

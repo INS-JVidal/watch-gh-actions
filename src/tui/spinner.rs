@@ -11,7 +11,11 @@ mod tests {
     #[test]
     fn braille_char_range() {
         for &ch in BRAILLE_FRAMES {
-            assert!(('\u{2800}'..='\u{28FF}').contains(&ch), "char {:?} not in Braille range", ch);
+            assert!(
+                ('\u{2800}'..='\u{28FF}').contains(&ch),
+                "char {:?} not in Braille range",
+                ch
+            );
         }
     }
 

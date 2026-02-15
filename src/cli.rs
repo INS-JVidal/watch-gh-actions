@@ -28,4 +28,65 @@ pub struct Cli {
     /// Disable desktop notifications
     #[arg(long)]
     pub no_notify: bool,
+
+    /// Enable verbose logging to ~/.local/state/ghw/debug.log
+    #[arg(long)]
+    pub verbose: bool,
+}
+
+/// Validates that `repo` matches the `owner/repo` pattern.
+pub fn validate_repo_format(repo: &str) -> Result<(), String> {
+    let parts: Vec<&str> = repo.split('/').collect();
+    if parts.len() != 2
+        || parts[0].is_empty()
+        || parts[1].is_empty()
+        || repo.contains(char::is_whitespace)
+    {
+        return Err(format!(
+            "Invalid repo format '{repo}'. Expected 'owner/repo' (e.g. 'cli/cli')."
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_repo_format() {
+        assert!(validate_repo_format("owner/repo").is_ok());
+        assert!(validate_repo_format("cli/cli").is_ok());
+        assert!(validate_repo_format("my-org/my-repo").is_ok());
+    }
+
+    #[test]
+    fn invalid_repo_no_slash() {
+        assert!(validate_repo_format("noslash").is_err());
+    }
+
+    #[test]
+    fn invalid_repo_multiple_slashes() {
+        assert!(validate_repo_format("a/b/c").is_err());
+    }
+
+    #[test]
+    fn invalid_repo_empty_owner() {
+        assert!(validate_repo_format("/repo").is_err());
+    }
+
+    #[test]
+    fn invalid_repo_empty_name() {
+        assert!(validate_repo_format("owner/").is_err());
+    }
+
+    #[test]
+    fn invalid_repo_whitespace() {
+        assert!(validate_repo_format("owner /repo").is_err());
+    }
+
+    #[test]
+    fn invalid_repo_empty_string() {
+        assert!(validate_repo_format("").is_err());
+    }
 }

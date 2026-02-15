@@ -67,11 +67,13 @@ pub fn render(f: &mut Frame, area: Rect, state: &AppState) {
             match state.resolve_item(item) {
                 Some(ResolvedItem::Run(run)) => {
                     let vis_idx = run_visual_idx.get(&item.run_idx).copied().unwrap_or(0);
+                    let has_run_error = state.run_errors.contains_key(&run.database_id);
                     render_run_line(
                         run,
                         vis_idx,
                         is_selected,
                         has_notification,
+                        has_run_error,
                         narrow,
                         inner_width,
                         item.expanded,
@@ -94,21 +96,20 @@ pub fn render(f: &mut Frame, area: Rect, state: &AppState) {
 fn status_icon(status: RunStatus, conclusion: Option<Conclusion>) -> (&'static str, Color) {
     match (status, conclusion) {
         (RunStatus::Completed, Some(Conclusion::Success)) => ("✓", Color::Green),
-        (RunStatus::Completed, Some(Conclusion::Failure)) => ("✗", Color::Red),
+        (RunStatus::Completed, Some(Conclusion::Failure | Conclusion::TimedOut)) => {
+            ("✗", Color::Red)
+        }
         (RunStatus::Completed, Some(Conclusion::Cancelled)) => ("⊘", Color::Yellow),
         (RunStatus::Completed, Some(Conclusion::Skipped)) => ("⊘", Color::DarkGray),
-        (RunStatus::Completed, Some(Conclusion::TimedOut)) => ("✗", Color::Red),
-        (RunStatus::Completed, _) => ("·", Color::DarkGray),
         (RunStatus::InProgress, _) => ("⟳", Color::Yellow),
-        (RunStatus::Queued | RunStatus::Waiting | RunStatus::Pending | RunStatus::Requested, _)
-        | (RunStatus::Unknown, _) => ("·", Color::DarkGray),
+        (_, _) => ("·", Color::DarkGray),
     }
 }
 
 fn format_duration(secs: i64) -> String {
     let secs = secs.max(0);
     if secs < 60 {
-        format!("{}s", secs)
+        format!("{secs}s")
     } else if secs < 3600 {
         format!("{}m {}s", secs / 60, secs % 60)
     } else {
@@ -140,6 +141,7 @@ fn render_run_line(
     visual_idx: usize,
     is_selected: bool,
     has_notification: bool,
+    has_run_error: bool,
     narrow: bool,
     max_width: usize,
     expanded: bool,
@@ -157,7 +159,8 @@ fn render_run_line(
     let arrow_display_width = UnicodeWidthStr::width(arrow);
     let prefix_width = 1 + arrow_display_width + 1 + icon_display_width + 1 + number.len() + 1;
     let suffix_width = if narrow { 0 } else { duration.len() + 1 };
-    let title_max = max_width.saturating_sub(prefix_width + suffix_width + 2);
+    let error_width = if has_run_error { 2 } else { 0 }; // "⚠ "
+    let title_max = max_width.saturating_sub(prefix_width + suffix_width + error_width + 2);
     let title = truncate(&run.display_title, title_max);
 
     let select_style = if is_selected {
@@ -175,17 +178,21 @@ fn render_run_line(
 
     let mut spans = vec![
         Span::styled(
-            format!("{}{} {} ", idx_label, arrow, icon),
+            format!("{idx_label}{arrow} {icon} "),
             Style::default().fg(icon_color),
         ),
-        Span::styled(format!("{} ", number), Style::default().fg(Color::DarkGray)),
+        Span::styled(format!("{number} "), Style::default().fg(Color::DarkGray)),
         Span::styled(notif_marker.to_string(), Style::default().fg(Color::Yellow)),
         Span::styled(title, select_style),
     ];
 
+    if has_run_error {
+        spans.push(Span::styled(" ⚠", Style::default().fg(Color::Red)));
+    }
+
     if !narrow {
         spans.push(Span::styled(
-            format!(" {}", duration),
+            format!(" {duration}"),
             Style::default().fg(Color::DarkGray),
         ));
     }
@@ -222,7 +229,7 @@ fn render_job_line(
         _ => String::new(),
     };
 
-    let prefix = format!("    {} {} ", arrow, icon);
+    let prefix = format!("    {arrow} {icon} ");
     let prefix_display_width = UnicodeWidthStr::width(prefix.as_str());
     let suffix_width = if duration.is_empty() {
         0
@@ -245,7 +252,7 @@ fn render_job_line(
 
     if !duration.is_empty() {
         spans.push(Span::styled(
-            format!(" {}", duration),
+            format!(" {duration}"),
             Style::default().fg(Color::DarkGray),
         ));
     }
@@ -256,7 +263,7 @@ fn render_job_line(
 fn render_step_line(step: &crate::app::Step, is_selected: bool, max_width: usize) -> Line<'static> {
     let (icon, icon_color) = status_icon(step.status, step.conclusion);
 
-    let prefix = format!("        {} ", icon);
+    let prefix = format!("        {icon} ");
     let prefix_display_width = UnicodeWidthStr::width(prefix.as_str());
     let name_max = max_width.saturating_sub(prefix_display_width);
     let name = truncate(&step.name, name_max);
@@ -282,7 +289,7 @@ fn render_loading_line(spinner_frame: usize, is_selected: bool) -> Line<'static>
     };
     Line::from(vec![
         Span::styled(
-            format!("    {} ", spinner_char),
+            format!("    {spinner_char} "),
             Style::default().fg(Color::Yellow),
         ),
         Span::styled("Loading…", select_style.fg(Color::DarkGray)),
@@ -424,7 +431,12 @@ mod tests {
 
     #[test]
     fn icon_queued_and_unknown() {
-        for status in [RunStatus::Queued, RunStatus::Waiting, RunStatus::Pending, RunStatus::Unknown] {
+        for status in [
+            RunStatus::Queued,
+            RunStatus::Waiting,
+            RunStatus::Pending,
+            RunStatus::Unknown,
+        ] {
             let (icon, color) = status_icon(status, None);
             assert_eq!(icon, "·");
             assert_eq!(color, Color::DarkGray);

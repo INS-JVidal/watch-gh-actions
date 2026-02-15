@@ -9,7 +9,11 @@ use ratatui::Frame;
 pub fn render(f: &mut Frame, area: Rect, state: &AppState) {
     let mut spans = vec![
         Span::styled(
-            format!(" ghw v{}+{} ", env!("CARGO_PKG_VERSION"), env!("BUILD_NUMBER")),
+            format!(
+                " ghw v{}+{} ",
+                env!("CARGO_PKG_VERSION"),
+                env!("BUILD_NUMBER")
+            ),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
@@ -26,7 +30,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &AppState) {
     if let Some(branch) = &state.config.branch {
         spans.push(Span::raw(" "));
         spans.push(Span::styled(
-            format!("[{}]", branch),
+            format!("[{branch}]"),
             Style::default().fg(Color::Yellow),
         ));
     }

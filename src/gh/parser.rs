@@ -1,7 +1,21 @@
 use crate::app::{Job, WorkflowRun};
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{eyre, Result};
+
+const MAX_RESPONSE_SIZE: usize = 10 * 1024 * 1024; // 10 MB
+
+fn check_response_size(json: &str) -> Result<()> {
+    if json.len() > MAX_RESPONSE_SIZE {
+        return Err(eyre!(
+            "Response too large ({:.1} MB, max {} MB)",
+            json.len() as f64 / (1024.0 * 1024.0),
+            MAX_RESPONSE_SIZE / (1024 * 1024)
+        ));
+    }
+    Ok(())
+}
 
 pub fn parse_runs(json: &str) -> Result<Vec<WorkflowRun>> {
+    check_response_size(json)?;
     let runs: Vec<WorkflowRun> = serde_json::from_str(json)?;
     Ok(runs)
 }
@@ -12,6 +26,7 @@ struct JobsResponse {
 }
 
 pub fn parse_jobs(json: &str) -> Result<Vec<Job>> {
+    check_response_size(json)?;
     let resp: JobsResponse = serde_json::from_str(json)?;
     Ok(resp.jobs)
 }
@@ -133,7 +148,12 @@ mod tests {
                 s
             );
             let runs = parse_runs(&json).unwrap();
-            assert_eq!(runs[0].conclusion, Some(*expected), "conclusion string: {}", s);
+            assert_eq!(
+                runs[0].conclusion,
+                Some(*expected),
+                "conclusion string: {}",
+                s
+            );
         }
     }
 
@@ -251,7 +271,10 @@ mod tests {
 
     #[test]
     fn process_log_output_truncates() {
-        let raw = (0..20).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
+        let raw = (0..20)
+            .map(|i| format!("line {}", i))
+            .collect::<Vec<_>>()
+            .join("\n");
         let (text, truncated) = process_log_output(&raw, 5);
         assert!(truncated);
         let lines: Vec<&str> = text.lines().collect();
@@ -273,5 +296,25 @@ mod tests {
         let (text, truncated) = process_log_output("", 10);
         assert_eq!(text, "");
         assert!(!truncated);
+    }
+
+    #[test]
+    fn parse_runs_rejects_oversized_response() {
+        let huge = "x".repeat(11 * 1024 * 1024);
+        let err = parse_runs(&huge).unwrap_err();
+        assert!(err.to_string().contains("too large"));
+    }
+
+    #[test]
+    fn parse_jobs_rejects_oversized_response() {
+        let huge = "x".repeat(11 * 1024 * 1024);
+        let err = parse_jobs(&huge).unwrap_err();
+        assert!(err.to_string().contains("too large"));
+    }
+
+    #[test]
+    fn parse_runs_accepts_within_limit() {
+        // Valid JSON under the size limit should not trigger the guard
+        assert!(parse_runs("[]").is_ok());
     }
 }

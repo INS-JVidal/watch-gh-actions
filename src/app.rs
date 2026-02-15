@@ -204,6 +204,9 @@ pub struct AppState {
     pub log_cache: HashMap<(u64, Option<u64>), FailedLog>,
     pub log_overlay: Option<LogOverlay>,
 
+    // Per-run errors (e.g. job-fetch failures)
+    pub run_errors: HashMap<u64, String>,
+
     // Desktop notifications
     pub desktop_notify: bool,
 }
@@ -239,6 +242,7 @@ impl AppState {
             should_quit: false,
             log_cache: HashMap::new(),
             log_overlay: None,
+            run_errors: HashMap::new(),
             desktop_notify: true,
         }
     }
@@ -259,15 +263,7 @@ impl AppState {
                 expanded: run_expanded,
             });
             if run_expanded {
-                if !run.jobs_fetched {
-                    items.push(TreeItem {
-                        level: TreeLevel::Loading,
-                        run_idx: *run_idx,
-                        job_idx: None,
-                        step_idx: None,
-                        expanded: false,
-                    });
-                } else {
+                if run.jobs_fetched {
                     for (job_idx, _job) in run.jobs.iter().enumerate() {
                         let job_expanded = self.expanded_jobs.contains(&(run_id, job_idx));
                         items.push(TreeItem {
@@ -289,6 +285,14 @@ impl AppState {
                             }
                         }
                     }
+                } else {
+                    items.push(TreeItem {
+                        level: TreeLevel::Loading,
+                        run_idx: *run_idx,
+                        job_idx: None,
+                        step_idx: None,
+                        expanded: false,
+                    });
                 }
             }
         }
@@ -311,7 +315,11 @@ impl AppState {
                         | RunStatus::Requested
                 )
             }
-            FilterMode::CurrentBranch => self.config.branch.as_ref().is_some_and(|b| r.head_branch == *b),
+            FilterMode::CurrentBranch => self
+                .config
+                .branch
+                .as_ref()
+                .is_some_and(|b| r.head_branch == *b),
         }
     }
 
@@ -372,8 +380,7 @@ impl AppState {
                         }
                     }
                 }
-                TreeLevel::Step => {}
-                TreeLevel::Loading => {}
+                TreeLevel::Step | TreeLevel::Loading => {}
             }
             self.rebuild_tree();
         }
@@ -402,8 +409,7 @@ impl AppState {
                         }
                     }
                 }
-                TreeLevel::Step => {}
-                TreeLevel::Loading => {}
+                TreeLevel::Step | TreeLevel::Loading => {}
             }
         }
         None
@@ -472,6 +478,12 @@ impl AppState {
         self.tree_items
             .get(self.cursor)
             .and_then(|item| self.runs.get(item.run_idx).map(|r| r.database_id))
+    }
+
+    pub fn current_run_status(&self) -> Option<RunStatus> {
+        self.tree_items
+            .get(self.cursor)
+            .and_then(|item| self.runs.get(item.run_idx).map(|r| r.status))
     }
 
     pub fn has_active_runs(&self) -> bool {
@@ -549,11 +561,14 @@ impl AppState {
     pub fn open_log_overlay(
         &mut self,
         title: String,
-        content: String,
+        content: &str,
         run_id: u64,
         job_id: Option<u64>,
     ) {
-        let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+        let lines: Vec<String> = content
+            .lines()
+            .map(std::string::ToString::to_string)
+            .collect();
         let lines = if lines.len() > LOG_MAX_LINES {
             lines[lines.len() - LOG_MAX_LINES..].to_vec()
         } else {
@@ -603,11 +618,7 @@ impl AppState {
         let run_id = run.database_id;
         match item.level {
             TreeLevel::Run => Some((run_id, None)),
-            TreeLevel::Job => {
-                let job = run.jobs.get(item.job_idx?)?;
-                Some((run_id, job.database_id))
-            }
-            TreeLevel::Step => {
+            TreeLevel::Job | TreeLevel::Step => {
                 let job = run.jobs.get(item.job_idx?)?;
                 Some((run_id, job.database_id))
             }
@@ -766,7 +777,11 @@ mod tests {
     #[test]
     fn expanded_run_shows_jobs() {
         let mut run = make_run(1, RunStatus::Completed, Some(Conclusion::Success));
-        run.jobs = vec![make_job("build", RunStatus::Completed, Some(Conclusion::Success))];
+        run.jobs = vec![make_job(
+            "build",
+            RunStatus::Completed,
+            Some(Conclusion::Success),
+        )];
         run.jobs_fetched = true;
         let mut state = state_with_runs(vec![run]);
         state.expanded_runs.insert(1);
@@ -778,7 +793,11 @@ mod tests {
     #[test]
     fn expanded_job_shows_steps() {
         let mut run = make_run(1, RunStatus::Completed, Some(Conclusion::Success));
-        run.jobs = vec![make_job("build", RunStatus::Completed, Some(Conclusion::Success))];
+        run.jobs = vec![make_job(
+            "build",
+            RunStatus::Completed,
+            Some(Conclusion::Success),
+        )];
         run.jobs_fetched = true;
         let mut state = state_with_runs(vec![run]);
         state.expanded_runs.insert(1);
@@ -794,9 +813,11 @@ mod tests {
 
     #[test]
     fn expand_returns_needs_fetch() {
-        let mut state = state_with_runs(vec![
-            make_run(1, RunStatus::Completed, Some(Conclusion::Success)),
-        ]);
+        let mut state = state_with_runs(vec![make_run(
+            1,
+            RunStatus::Completed,
+            Some(Conclusion::Success),
+        )]);
         let result = state.expand_current();
         assert_eq!(result, Some((0, true))); // needs_fetch because jobs_fetched is false
         assert!(state.expanded_runs.contains(&1));
@@ -813,9 +834,11 @@ mod tests {
 
     #[test]
     fn expand_already_expanded_returns_none() {
-        let mut state = state_with_runs(vec![
-            make_run(1, RunStatus::Completed, Some(Conclusion::Success)),
-        ]);
+        let mut state = state_with_runs(vec![make_run(
+            1,
+            RunStatus::Completed,
+            Some(Conclusion::Success),
+        )]);
         state.expanded_runs.insert(1);
         state.rebuild_tree();
         let result = state.expand_current();
@@ -824,9 +847,11 @@ mod tests {
 
     #[test]
     fn collapse_removes_from_expanded() {
-        let mut state = state_with_runs(vec![
-            make_run(1, RunStatus::Completed, Some(Conclusion::Success)),
-        ]);
+        let mut state = state_with_runs(vec![make_run(
+            1,
+            RunStatus::Completed,
+            Some(Conclusion::Success),
+        )]);
         state.expanded_runs.insert(1);
         state.rebuild_tree();
         state.collapse_current();
@@ -836,7 +861,11 @@ mod tests {
     #[test]
     fn collapse_on_unexpanded_job_navigates_to_parent() {
         let mut run = make_run(1, RunStatus::Completed, Some(Conclusion::Success));
-        run.jobs = vec![make_job("build", RunStatus::Completed, Some(Conclusion::Success))];
+        run.jobs = vec![make_job(
+            "build",
+            RunStatus::Completed,
+            Some(Conclusion::Success),
+        )];
         run.jobs_fetched = true;
         let mut state = state_with_runs(vec![run]);
         state.expanded_runs.insert(1);
@@ -848,9 +877,11 @@ mod tests {
 
     #[test]
     fn toggle_expand_then_collapse() {
-        let mut state = state_with_runs(vec![
-            make_run(1, RunStatus::Completed, Some(Conclusion::Success)),
-        ]);
+        let mut state = state_with_runs(vec![make_run(
+            1,
+            RunStatus::Completed,
+            Some(Conclusion::Success),
+        )]);
         state.toggle_expand();
         assert!(state.expanded_runs.contains(&1));
         state.toggle_expand();
@@ -860,7 +891,11 @@ mod tests {
     #[test]
     fn collapse_run_cascades_to_child_jobs() {
         let mut run = make_run(1, RunStatus::Completed, Some(Conclusion::Success));
-        run.jobs = vec![make_job("build", RunStatus::Completed, Some(Conclusion::Success))];
+        run.jobs = vec![make_job(
+            "build",
+            RunStatus::Completed,
+            Some(Conclusion::Success),
+        )];
         run.jobs_fetched = true;
         let mut state = state_with_runs(vec![run]);
         state.expanded_runs.insert(1);
@@ -970,7 +1005,11 @@ mod tests {
     #[test]
     fn quick_select_skips_non_run_items() {
         let mut run = make_run(1, RunStatus::Completed, Some(Conclusion::Success));
-        run.jobs = vec![make_job("build", RunStatus::Completed, Some(Conclusion::Success))];
+        run.jobs = vec![make_job(
+            "build",
+            RunStatus::Completed,
+            Some(Conclusion::Success),
+        )];
         run.jobs_fetched = true;
         let mut state = state_with_runs(vec![
             run,
@@ -985,9 +1024,11 @@ mod tests {
 
     #[test]
     fn quick_select_out_of_range_does_nothing() {
-        let mut state = state_with_runs(vec![
-            make_run(1, RunStatus::Completed, Some(Conclusion::Success)),
-        ]);
+        let mut state = state_with_runs(vec![make_run(
+            1,
+            RunStatus::Completed,
+            Some(Conclusion::Success),
+        )]);
         state.cursor = 0;
         state.quick_select(5);
         assert_eq!(state.cursor, 0); // unchanged
@@ -997,17 +1038,17 @@ mod tests {
 
     #[test]
     fn has_active_runs_true() {
-        let state = state_with_runs(vec![
-            make_run(1, RunStatus::InProgress, None),
-        ]);
+        let state = state_with_runs(vec![make_run(1, RunStatus::InProgress, None)]);
         assert!(state.has_active_runs());
     }
 
     #[test]
     fn has_active_runs_false() {
-        let state = state_with_runs(vec![
-            make_run(1, RunStatus::Completed, Some(Conclusion::Success)),
-        ]);
+        let state = state_with_runs(vec![make_run(
+            1,
+            RunStatus::Completed,
+            Some(Conclusion::Success),
+        )]);
         assert!(!state.has_active_runs());
     }
 
@@ -1029,36 +1070,55 @@ mod tests {
 
     #[test]
     fn resolve_item_run() {
-        let state = state_with_runs(vec![
-            make_run(1, RunStatus::Completed, Some(Conclusion::Success)),
-        ]);
+        let state = state_with_runs(vec![make_run(
+            1,
+            RunStatus::Completed,
+            Some(Conclusion::Success),
+        )]);
         let item = &state.tree_items[0];
-        assert!(matches!(state.resolve_item(item), Some(ResolvedItem::Run(_))));
+        assert!(matches!(
+            state.resolve_item(item),
+            Some(ResolvedItem::Run(_))
+        ));
     }
 
     #[test]
     fn resolve_item_job() {
         let mut run = make_run(1, RunStatus::Completed, Some(Conclusion::Success));
-        run.jobs = vec![make_job("build", RunStatus::Completed, Some(Conclusion::Success))];
+        run.jobs = vec![make_job(
+            "build",
+            RunStatus::Completed,
+            Some(Conclusion::Success),
+        )];
         run.jobs_fetched = true;
         let mut state = state_with_runs(vec![run]);
         state.expanded_runs.insert(1);
         state.rebuild_tree();
         let item = &state.tree_items[1];
-        assert!(matches!(state.resolve_item(item), Some(ResolvedItem::Job(_))));
+        assert!(matches!(
+            state.resolve_item(item),
+            Some(ResolvedItem::Job(_))
+        ));
     }
 
     #[test]
     fn resolve_item_step() {
         let mut run = make_run(1, RunStatus::Completed, Some(Conclusion::Success));
-        run.jobs = vec![make_job("build", RunStatus::Completed, Some(Conclusion::Success))];
+        run.jobs = vec![make_job(
+            "build",
+            RunStatus::Completed,
+            Some(Conclusion::Success),
+        )];
         run.jobs_fetched = true;
         let mut state = state_with_runs(vec![run]);
         state.expanded_runs.insert(1);
         state.expanded_jobs.insert((1, 0));
         state.rebuild_tree();
         let item = &state.tree_items[2]; // first step
-        assert!(matches!(state.resolve_item(item), Some(ResolvedItem::Step(_))));
+        assert!(matches!(
+            state.resolve_item(item),
+            Some(ResolvedItem::Step(_))
+        ));
     }
 
     #[test]
@@ -1099,9 +1159,11 @@ mod tests {
 
     #[test]
     fn current_run_url_returns_url() {
-        let state = state_with_runs(vec![
-            make_run(42, RunStatus::Completed, Some(Conclusion::Success)),
-        ]);
+        let state = state_with_runs(vec![make_run(
+            42,
+            RunStatus::Completed,
+            Some(Conclusion::Success),
+        )]);
         assert_eq!(
             state.current_run_url(),
             Some("https://github.com/test/repo/actions/runs/42")
@@ -1110,9 +1172,11 @@ mod tests {
 
     #[test]
     fn current_run_id_returns_id() {
-        let state = state_with_runs(vec![
-            make_run(42, RunStatus::Completed, Some(Conclusion::Success)),
-        ]);
+        let state = state_with_runs(vec![make_run(
+            42,
+            RunStatus::Completed,
+            Some(Conclusion::Success),
+        )]);
         assert_eq!(state.current_run_id(), Some(42));
     }
 
@@ -1126,24 +1190,32 @@ mod tests {
 
     #[test]
     fn current_item_is_failed_on_failed_run() {
-        let state = state_with_runs(vec![
-            make_run(1, RunStatus::Completed, Some(Conclusion::Failure)),
-        ]);
+        let state = state_with_runs(vec![make_run(
+            1,
+            RunStatus::Completed,
+            Some(Conclusion::Failure),
+        )]);
         assert!(state.current_item_is_failed());
     }
 
     #[test]
     fn current_item_is_failed_on_success_run() {
-        let state = state_with_runs(vec![
-            make_run(1, RunStatus::Completed, Some(Conclusion::Success)),
-        ]);
+        let state = state_with_runs(vec![make_run(
+            1,
+            RunStatus::Completed,
+            Some(Conclusion::Success),
+        )]);
         assert!(!state.current_item_is_failed());
     }
 
     #[test]
     fn current_item_is_failed_on_failed_job() {
         let mut run = make_run(1, RunStatus::Completed, Some(Conclusion::Failure));
-        run.jobs = vec![make_job("build", RunStatus::Completed, Some(Conclusion::Failure))];
+        run.jobs = vec![make_job(
+            "build",
+            RunStatus::Completed,
+            Some(Conclusion::Failure),
+        )];
         run.jobs_fetched = true;
         let mut state = state_with_runs(vec![run]);
         state.expanded_runs.insert(1);
@@ -1160,9 +1232,11 @@ mod tests {
 
     #[test]
     fn current_item_ids_run() {
-        let state = state_with_runs(vec![
-            make_run(42, RunStatus::Completed, Some(Conclusion::Failure)),
-        ]);
+        let state = state_with_runs(vec![make_run(
+            42,
+            RunStatus::Completed,
+            Some(Conclusion::Failure),
+        )]);
         assert_eq!(state.current_item_ids(), Some((42, None)));
     }
 
@@ -1191,7 +1265,7 @@ mod tests {
         let mut state = state_with_runs(vec![]);
         assert!(!state.has_log_overlay());
 
-        state.open_log_overlay("Test".to_string(), "line1\nline2".to_string(), 1, None);
+        state.open_log_overlay("Test".to_string(), "line1\nline2", 1, None);
         assert!(state.has_log_overlay());
         assert_eq!(state.log_overlay.as_ref().unwrap().lines.len(), 2);
         assert_eq!(state.log_overlay_text(), Some("line1\nline2".to_string()));
@@ -1204,9 +1278,15 @@ mod tests {
     #[test]
     fn log_overlay_truncates_long_content() {
         let mut state = state_with_runs(vec![]);
-        let content: String = (0..600).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
-        state.open_log_overlay("Test".to_string(), content, 1, None);
-        assert_eq!(state.log_overlay.as_ref().unwrap().lines.len(), LOG_MAX_LINES);
+        let content: String = (0..600)
+            .map(|i| format!("line {}", i))
+            .collect::<Vec<_>>()
+            .join("\n");
+        state.open_log_overlay("Test".to_string(), &content, 1, None);
+        assert_eq!(
+            state.log_overlay.as_ref().unwrap().lines.len(),
+            LOG_MAX_LINES
+        );
         // Should keep last 500 lines (100..599)
         assert!(state.log_overlay.as_ref().unwrap().lines[0].contains("100"));
     }
@@ -1214,8 +1294,11 @@ mod tests {
     #[test]
     fn scroll_log_bounds() {
         let mut state = state_with_runs(vec![]);
-        let content = (0..50).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
-        state.open_log_overlay("Test".to_string(), content, 1, None);
+        let content = (0..50)
+            .map(|i| format!("line {}", i))
+            .collect::<Vec<_>>()
+            .join("\n");
+        state.open_log_overlay("Test".to_string(), &content, 1, None);
 
         // Scroll down
         state.scroll_log_down(5, 20);

@@ -1,30 +1,33 @@
 use color_eyre::eyre::{eyre, Result};
+use std::time::Duration;
 use tokio::process::Command;
 
+const GH_TIMEOUT: Duration = Duration::from_secs(30);
+const CLIPBOARD_TIMEOUT: Duration = Duration::from_secs(10);
+
 pub async fn run_gh(args: &[&str]) -> Result<String> {
-    let output = Command::new("gh").args(args).output().await.map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            eyre!("gh CLI not found. Install it from https://cli.github.com/")
-        } else {
-            eyre!("Failed to run gh: {}", e)
-        }
-    })?;
+    let start = std::time::Instant::now();
+    let output = tokio::time::timeout(GH_TIMEOUT, Command::new("gh").args(args).output())
+        .await
+        .map_err(|_| eyre!("gh command timed out after {}s", GH_TIMEOUT.as_secs()))?
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                eyre!("gh CLI not found. Install it from https://cli.github.com/")
+            } else {
+                eyre!("Failed to run gh: {}", e)
+            }
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("not logged") || stderr.contains("auth login") {
-            return Err(eyre!(
-                "Not authenticated with gh. Run `gh auth login` first."
-            ));
-        }
-        if stderr.contains("not a git repository") || stderr.contains("could not determine") {
-            return Err(eyre!(
-                "Not in a GitHub repository. Use --repo flag or cd into a repo."
-            ));
-        }
-        return Err(eyre!("gh command failed: {}", stderr.trim()));
+        return Err(eyre!("{}", classify_gh_error(&stderr)));
     }
 
+    tracing::debug!(
+        args = ?args,
+        elapsed_ms = start.elapsed().as_millis(),
+        "gh command completed"
+    );
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
@@ -50,11 +53,15 @@ pub async fn detect_repo() -> Result<String> {
 }
 
 pub async fn detect_branch() -> Result<String> {
-    let output = Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .output()
-        .await
-        .map_err(|e| eyre!("Failed to detect branch: {}", e))?;
+    let output = tokio::time::timeout(
+        GH_TIMEOUT,
+        Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .output(),
+    )
+    .await
+    .map_err(|_| eyre!("git command timed out after {}s", GH_TIMEOUT.as_secs()))?
+    .map_err(|e| eyre!("Failed to detect branch: {}", e))?;
 
     if !output.status.success() {
         return Err(eyre!("Failed to detect branch"));
@@ -82,7 +89,7 @@ pub async fn fetch_jobs(repo: &str, run_id: u64) -> Result<String> {
     run_gh(&["run", "view", "--repo", repo, &run_id_str, "--json", "jobs"]).await
 }
 
-pub async fn open_in_browser(url: &str) -> Result<()> {
+pub fn open_in_browser(url: &str) -> Result<()> {
     let (cmd, args): (&str, Vec<&str>) = if cfg!(target_os = "macos") {
         ("open", vec![url])
     } else if cfg!(target_os = "windows") {
@@ -97,9 +104,9 @@ pub async fn open_in_browser(url: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn rerun_failed(repo: &str, run_id: u64) -> Result<()> {
+pub async fn rerun_workflow(repo: &str, run_id: u64) -> Result<()> {
     let run_id_str = run_id.to_string();
-    run_gh(&["run", "rerun", "--repo", repo, &run_id_str, "--failed"]).await?;
+    run_gh(&["run", "rerun", "--repo", repo, &run_id_str]).await?;
     Ok(())
 }
 
@@ -112,7 +119,14 @@ pub async fn fetch_failed_logs_for_job(repo: &str, run_id: u64, job_id: u64) -> 
     let run_id_str = run_id.to_string();
     let job_id_str = job_id.to_string();
     run_gh(&[
-        "run", "view", "--repo", repo, &run_id_str, "--log-failed", "--job", &job_id_str,
+        "run",
+        "view",
+        "--repo",
+        repo,
+        &run_id_str,
+        "--log-failed",
+        "--job",
+        &job_id_str,
     ])
     .await
 }
@@ -147,7 +161,14 @@ pub async fn copy_to_clipboard(text: &str) -> Result<()> {
                 let _ = stdin.write_all(text.as_bytes()).await;
                 drop(stdin);
             }
-            let status = child.wait().await?;
+            let status = tokio::time::timeout(CLIPBOARD_TIMEOUT, child.wait())
+                .await
+                .map_err(|_| {
+                    eyre!(
+                        "clipboard command timed out after {}s",
+                        CLIPBOARD_TIMEOUT.as_secs()
+                    )
+                })??;
             if status.success() {
                 return Ok(());
             }
@@ -157,4 +178,66 @@ pub async fn copy_to_clipboard(text: &str) -> Result<()> {
     Err(eyre!(
         "No clipboard tool found. Install xclip, wl-copy, or use WSL with clip.exe"
     ))
+}
+
+pub fn classify_gh_error(stderr: &str) -> String {
+    if stderr.contains("not logged") || stderr.contains("auth login") {
+        "Not authenticated with gh. Run `gh auth login` first.".to_string()
+    } else if stderr.contains("not a git repository") || stderr.contains("could not determine") {
+        "Not in a GitHub repository. Use --repo flag or cd into a repo.".to_string()
+    } else {
+        let trimmed = stderr.trim();
+        if trimmed.is_empty() {
+            "gh command failed".to_string()
+        } else {
+            format!("gh command failed: {trimmed}")
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_not_logged_in() {
+        let msg = classify_gh_error("You are not logged into any GitHub hosts");
+        assert!(msg.contains("Not authenticated"));
+    }
+
+    #[test]
+    fn classify_auth_login() {
+        let msg = classify_gh_error("To get started with GitHub CLI, please run: gh auth login");
+        assert!(msg.contains("Not authenticated"));
+    }
+
+    #[test]
+    fn classify_not_a_git_repo() {
+        let msg = classify_gh_error("fatal: not a git repository (or any parent)");
+        assert!(msg.contains("Not in a GitHub repository"));
+    }
+
+    #[test]
+    fn classify_could_not_determine() {
+        let msg = classify_gh_error("could not determine repo from current directory");
+        assert!(msg.contains("Not in a GitHub repository"));
+    }
+
+    #[test]
+    fn classify_generic_error() {
+        let msg = classify_gh_error("something went wrong");
+        assert_eq!(msg, "gh command failed: something went wrong");
+    }
+
+    #[test]
+    fn classify_empty_stderr() {
+        let msg = classify_gh_error("");
+        assert_eq!(msg, "gh command failed");
+    }
+
+    #[test]
+    fn classify_whitespace_only_stderr() {
+        let msg = classify_gh_error("   \n  ");
+        assert_eq!(msg, "gh command failed");
+    }
 }

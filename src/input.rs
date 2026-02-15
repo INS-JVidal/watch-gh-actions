@@ -47,7 +47,7 @@ pub fn map_key(key: KeyEvent, has_error: bool, is_loading: bool, has_log_overlay
             KeyCode::Char('g') => Action::ScrollToTop,
             KeyCode::Char('G') => Action::ScrollToBottom,
             KeyCode::Char('y') => Action::CopyToClipboard,
-            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('e') => Action::CloseOverlay,
+            KeyCode::Char('q' | 'e') | KeyCode::Esc => Action::CloseOverlay,
             _ => Action::None,
         };
     }
@@ -113,105 +113,167 @@ mod tests {
 
     #[test]
     fn quit_on_q() {
-        assert_eq!(map_key(press(KeyCode::Char('q')), false, false, false), Action::Quit);
+        assert_eq!(
+            map_key(press(KeyCode::Char('q')), false, false, false),
+            Action::Quit
+        );
     }
 
     #[test]
     fn esc_quits_without_error() {
-        assert_eq!(map_key(press(KeyCode::Esc), false, false, false), Action::Quit);
+        assert_eq!(
+            map_key(press(KeyCode::Esc), false, false, false),
+            Action::Quit
+        );
     }
 
     #[test]
     fn esc_dismisses_error_when_present() {
-        assert_eq!(map_key(press(KeyCode::Esc), true, false, false), Action::DismissError);
+        assert_eq!(
+            map_key(press(KeyCode::Esc), true, false, false),
+            Action::DismissError
+        );
     }
 
     #[test]
     fn ctrl_c_quits() {
         assert_eq!(
-            map_key(press_with(KeyCode::Char('c'), KeyModifiers::CONTROL), false, false, false),
+            map_key(
+                press_with(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                false,
+                false,
+                false
+            ),
             Action::Quit
         );
     }
 
     #[test]
     fn move_up_arrow() {
-        assert_eq!(map_key(press(KeyCode::Up), false, false, false), Action::MoveUp);
+        assert_eq!(
+            map_key(press(KeyCode::Up), false, false, false),
+            Action::MoveUp
+        );
     }
 
     #[test]
     fn move_up_k() {
-        assert_eq!(map_key(press(KeyCode::Char('k')), false, false, false), Action::MoveUp);
+        assert_eq!(
+            map_key(press(KeyCode::Char('k')), false, false, false),
+            Action::MoveUp
+        );
     }
 
     #[test]
     fn move_down_arrow() {
-        assert_eq!(map_key(press(KeyCode::Down), false, false, false), Action::MoveDown);
+        assert_eq!(
+            map_key(press(KeyCode::Down), false, false, false),
+            Action::MoveDown
+        );
     }
 
     #[test]
     fn move_down_j() {
-        assert_eq!(map_key(press(KeyCode::Char('j')), false, false, false), Action::MoveDown);
+        assert_eq!(
+            map_key(press(KeyCode::Char('j')), false, false, false),
+            Action::MoveDown
+        );
     }
 
     #[test]
     fn expand_right_arrow() {
-        assert_eq!(map_key(press(KeyCode::Right), false, false, false), Action::Expand);
+        assert_eq!(
+            map_key(press(KeyCode::Right), false, false, false),
+            Action::Expand
+        );
     }
 
     #[test]
     fn expand_l() {
-        assert_eq!(map_key(press(KeyCode::Char('l')), false, false, false), Action::Expand);
+        assert_eq!(
+            map_key(press(KeyCode::Char('l')), false, false, false),
+            Action::Expand
+        );
     }
 
     #[test]
     fn expand_enter() {
-        assert_eq!(map_key(press(KeyCode::Enter), false, false, false), Action::Expand);
+        assert_eq!(
+            map_key(press(KeyCode::Enter), false, false, false),
+            Action::Expand
+        );
     }
 
     #[test]
     fn collapse_left_arrow() {
-        assert_eq!(map_key(press(KeyCode::Left), false, false, false), Action::Collapse);
+        assert_eq!(
+            map_key(press(KeyCode::Left), false, false, false),
+            Action::Collapse
+        );
     }
 
     #[test]
     fn collapse_h() {
-        assert_eq!(map_key(press(KeyCode::Char('h')), false, false, false), Action::Collapse);
+        assert_eq!(
+            map_key(press(KeyCode::Char('h')), false, false, false),
+            Action::Collapse
+        );
     }
 
     #[test]
     fn toggle_space() {
-        assert_eq!(map_key(press(KeyCode::Char(' ')), false, false, false), Action::Toggle);
+        assert_eq!(
+            map_key(press(KeyCode::Char(' ')), false, false, false),
+            Action::Toggle
+        );
     }
 
     #[test]
     fn refresh_r() {
-        assert_eq!(map_key(press(KeyCode::Char('r')), false, false, false), Action::Refresh);
+        assert_eq!(
+            map_key(press(KeyCode::Char('r')), false, false, false),
+            Action::Refresh
+        );
     }
 
     #[test]
     fn refresh_blocked_while_loading() {
-        assert_eq!(map_key(press(KeyCode::Char('r')), false, true, false), Action::None);
+        assert_eq!(
+            map_key(press(KeyCode::Char('r')), false, true, false),
+            Action::None
+        );
     }
 
     #[test]
     fn rerun_failed_capital_r() {
-        assert_eq!(map_key(press(KeyCode::Char('R')), false, false, false), Action::RerunFailed);
+        assert_eq!(
+            map_key(press(KeyCode::Char('R')), false, false, false),
+            Action::RerunFailed
+        );
     }
 
     #[test]
     fn open_browser_o() {
-        assert_eq!(map_key(press(KeyCode::Char('o')), false, false, false), Action::OpenBrowser);
+        assert_eq!(
+            map_key(press(KeyCode::Char('o')), false, false, false),
+            Action::OpenBrowser
+        );
     }
 
     #[test]
     fn cycle_filter_f() {
-        assert_eq!(map_key(press(KeyCode::Char('f')), false, false, false), Action::CycleFilter);
+        assert_eq!(
+            map_key(press(KeyCode::Char('f')), false, false, false),
+            Action::CycleFilter
+        );
     }
 
     #[test]
     fn filter_branch_b() {
-        assert_eq!(map_key(press(KeyCode::Char('b')), false, false, false), Action::FilterBranch);
+        assert_eq!(
+            map_key(press(KeyCode::Char('b')), false, false, false),
+            Action::FilterBranch
+        );
     }
 
     #[test]
@@ -227,81 +289,128 @@ mod tests {
 
     #[test]
     fn digit_zero_returns_none() {
-        assert_eq!(map_key(press(KeyCode::Char('0')), false, false, false), Action::None);
+        assert_eq!(
+            map_key(press(KeyCode::Char('0')), false, false, false),
+            Action::None
+        );
     }
 
     #[test]
     fn unbound_key_returns_none() {
-        assert_eq!(map_key(press(KeyCode::Char('z')), false, false, false), Action::None);
+        assert_eq!(
+            map_key(press(KeyCode::Char('z')), false, false, false),
+            Action::None
+        );
     }
 
     #[test]
     fn non_press_event_filtered() {
-        assert_eq!(map_key(release(KeyCode::Char('q')), false, false, false), Action::None);
+        assert_eq!(
+            map_key(release(KeyCode::Char('q')), false, false, false),
+            Action::None
+        );
     }
 
     #[test]
     fn view_logs_e() {
-        assert_eq!(map_key(press(KeyCode::Char('e')), false, false, false), Action::ViewLogs);
+        assert_eq!(
+            map_key(press(KeyCode::Char('e')), false, false, false),
+            Action::ViewLogs
+        );
     }
 
     // --- Overlay mode tests ---
 
     #[test]
     fn overlay_scroll_down_j() {
-        assert_eq!(map_key(press(KeyCode::Char('j')), false, false, true), Action::ScrollDown);
+        assert_eq!(
+            map_key(press(KeyCode::Char('j')), false, false, true),
+            Action::ScrollDown
+        );
     }
 
     #[test]
     fn overlay_scroll_up_k() {
-        assert_eq!(map_key(press(KeyCode::Char('k')), false, false, true), Action::ScrollUp);
+        assert_eq!(
+            map_key(press(KeyCode::Char('k')), false, false, true),
+            Action::ScrollUp
+        );
     }
 
     #[test]
     fn overlay_page_down() {
-        assert_eq!(map_key(press(KeyCode::PageDown), false, false, true), Action::PageDown);
+        assert_eq!(
+            map_key(press(KeyCode::PageDown), false, false, true),
+            Action::PageDown
+        );
     }
 
     #[test]
     fn overlay_page_up() {
-        assert_eq!(map_key(press(KeyCode::PageUp), false, false, true), Action::PageUp);
+        assert_eq!(
+            map_key(press(KeyCode::PageUp), false, false, true),
+            Action::PageUp
+        );
     }
 
     #[test]
     fn overlay_scroll_to_top_g() {
-        assert_eq!(map_key(press(KeyCode::Char('g')), false, false, true), Action::ScrollToTop);
+        assert_eq!(
+            map_key(press(KeyCode::Char('g')), false, false, true),
+            Action::ScrollToTop
+        );
     }
 
     #[test]
     #[allow(non_snake_case)]
     fn overlay_scroll_to_bottom_G() {
-        assert_eq!(map_key(press(KeyCode::Char('G')), false, false, true), Action::ScrollToBottom);
+        assert_eq!(
+            map_key(press(KeyCode::Char('G')), false, false, true),
+            Action::ScrollToBottom
+        );
     }
 
     #[test]
     fn overlay_copy_y() {
-        assert_eq!(map_key(press(KeyCode::Char('y')), false, false, true), Action::CopyToClipboard);
+        assert_eq!(
+            map_key(press(KeyCode::Char('y')), false, false, true),
+            Action::CopyToClipboard
+        );
     }
 
     #[test]
     fn overlay_close_q() {
-        assert_eq!(map_key(press(KeyCode::Char('q')), false, false, true), Action::CloseOverlay);
+        assert_eq!(
+            map_key(press(KeyCode::Char('q')), false, false, true),
+            Action::CloseOverlay
+        );
     }
 
     #[test]
     fn overlay_close_esc() {
-        assert_eq!(map_key(press(KeyCode::Esc), false, false, true), Action::CloseOverlay);
+        assert_eq!(
+            map_key(press(KeyCode::Esc), false, false, true),
+            Action::CloseOverlay
+        );
     }
 
     #[test]
     fn overlay_close_e() {
-        assert_eq!(map_key(press(KeyCode::Char('e')), false, false, true), Action::CloseOverlay);
+        assert_eq!(
+            map_key(press(KeyCode::Char('e')), false, false, true),
+            Action::CloseOverlay
+        );
     }
 
     #[test]
     fn overlay_ctrl_c_quits() {
         assert_eq!(
-            map_key(press_with(KeyCode::Char('c'), KeyModifiers::CONTROL), false, false, true),
+            map_key(
+                press_with(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                false,
+                false,
+                true
+            ),
             Action::Quit
         );
     }

@@ -1,9 +1,7 @@
 #![allow(dead_code)]
 
 use chrono::Utc;
-use ghw::app::{
-    AppState, Conclusion, Job, RunStatus, Step, WorkflowRun,
-};
+use ghw::app::{AppState, Conclusion, Job, RunStatus, Step, WorkflowRun};
 
 pub fn default_run() -> WorkflowRun {
     run_with_id(1)

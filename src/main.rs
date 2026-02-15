@@ -10,7 +10,7 @@ use ghw::tui;
 use app::AppState;
 use clap::Parser;
 use cli::Cli;
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{eyre, Result};
 use crossterm::execute;
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen, SetTitle};
 use events::{AppEvent, EventHandler};
@@ -22,10 +22,49 @@ use std::io;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
+fn setup_verbose_logging() -> Result<()> {
+    let state_dir = dirs_next_or_fallback();
+    std::fs::create_dir_all(&state_dir)
+        .map_err(|e| eyre!("Failed to create log directory {state_dir:?}: {e}"))?;
+    let log_path = state_dir.join("debug.log");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| eyre!("Failed to open log file {log_path:?}: {e}"))?;
+    tracing_subscriber::fmt()
+        .with_writer(file)
+        .with_ansi(false)
+        .init();
+    tracing::info!(
+        "ghw v{} starting with verbose logging",
+        env!("CARGO_PKG_VERSION")
+    );
+    Ok(())
+}
+
+fn dirs_next_or_fallback() -> std::path::PathBuf {
+    if let Some(state) = std::env::var_os("XDG_STATE_HOME") {
+        std::path::PathBuf::from(state).join("ghw")
+    } else if let Some(home) = std::env::var_os("HOME") {
+        std::path::PathBuf::from(home)
+            .join(".local")
+            .join("state")
+            .join("ghw")
+    } else {
+        std::path::PathBuf::from("/tmp/ghw")
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     color_eyre::install()?;
     let args = Cli::parse();
+
+    // Setup verbose logging
+    if args.verbose {
+        setup_verbose_logging()?;
+    }
 
     // Setup terminal with panic hook early, before any data fetching
     let original_hook = std::panic::take_hook();
@@ -127,7 +166,12 @@ async fn run_app(
         if let Some(event) = events.next().await {
             match event {
                 AppEvent::Key(key) => {
-                    match input::map_key(key, state.error.is_some(), state.is_loading, state.has_log_overlay()) {
+                    match input::map_key(
+                        key,
+                        state.error.is_some(),
+                        state.is_loading,
+                        state.has_log_overlay(),
+                    ) {
                         Action::Quit => state.should_quit = true,
                         Action::DismissError => state.clear_error(),
                         Action::MoveUp => state.move_cursor_up(),
@@ -140,8 +184,7 @@ async fn run_app(
                                         let tx2 = tx.clone();
                                         let repo2 = repo.to_string();
                                         tokio::spawn(async move {
-                                            poller::fetch_jobs_for_run(&repo2, run_id, &tx2)
-                                                .await;
+                                            poller::fetch_jobs_for_run(&repo2, run_id, &tx2).await;
                                         });
                                     }
                                 }
@@ -156,16 +199,13 @@ async fn run_app(
                             let limit = state.config.limit;
                             let wf = state.config.workflow_filter.clone();
                             tokio::spawn(async move {
-                                match gh::executor::fetch_runs(&repo2, limit, wf.as_deref())
-                                    .await
-                                {
+                                match gh::executor::fetch_runs(&repo2, limit, wf.as_deref()).await {
                                     Ok(json) => match gh::parser::parse_runs(&json) {
                                         Ok(runs) => {
                                             let _ = tx2.send(AppEvent::PollResult(runs));
                                         }
                                         Err(e) => {
-                                            let _ =
-                                                tx2.send(AppEvent::Error(format!("{}", e)));
+                                            let _ = tx2.send(AppEvent::Error(format!("{}", e)));
                                         }
                                     },
                                     Err(e) => {
@@ -177,25 +217,29 @@ async fn run_app(
                         }
                         Action::RerunFailed => {
                             if let Some(run_id) = state.current_run_id() {
-                                // Clear log cache for this run (logs will change after rerun)
-                                state.log_cache.retain(|(r, _), _| *r != run_id);
-                                let repo2 = repo.to_string();
-                                let tx2 = tx.clone();
-                                tokio::spawn(async move {
-                                    if let Err(e) =
-                                        gh::executor::rerun_failed(&repo2, run_id).await
-                                    {
-                                        let _ = tx2.send(AppEvent::Error(format!("{}", e)));
-                                    }
-                                });
+                                if state.current_run_status() != Some(app::RunStatus::Completed) {
+                                    state.set_error(
+                                        "Cannot rerun: workflow is still in progress".to_string(),
+                                    );
+                                } else {
+                                    let repo2 = repo.to_string();
+                                    let tx2 = tx.clone();
+                                    tokio::spawn(async move {
+                                        match gh::executor::rerun_workflow(&repo2, run_id).await {
+                                            Ok(()) => {
+                                                let _ = tx2.send(AppEvent::RerunSuccess(run_id));
+                                            }
+                                            Err(e) => {
+                                                let _ = tx2.send(AppEvent::Error(format!("{}", e)));
+                                            }
+                                        }
+                                    });
+                                }
                             }
                         }
                         Action::OpenBrowser => {
                             if let Some(url) = state.current_run_url() {
-                                let url = url.to_string();
-                                tokio::spawn(async move {
-                                    let _ = gh::executor::open_in_browser(&url).await;
-                                });
+                                let _ = gh::executor::open_in_browser(url);
                             }
                         }
                         Action::ViewLogs => {
@@ -204,7 +248,9 @@ async fn run_app(
                             } else if let Some((run_id, job_id)) = state.current_item_ids() {
                                 let cache_key = (run_id, job_id);
                                 let cached = state.log_cache.get(&cache_key).and_then(|entry| {
-                                    if entry.fetched_at.elapsed().as_secs() < app::LOG_CACHE_TTL_SECS {
+                                    if entry.fetched_at.elapsed().as_secs()
+                                        < app::LOG_CACHE_TTL_SECS
+                                    {
                                         Some(entry.content.clone())
                                     } else {
                                         None
@@ -212,7 +258,7 @@ async fn run_app(
                                 });
                                 if let Some(content) = cached {
                                     let title = build_log_title(state, run_id, job_id);
-                                    state.open_log_overlay(title, content, run_id, job_id);
+                                    state.open_log_overlay(title, &content, run_id, job_id);
                                 } else {
                                     let title = build_log_title(state, run_id, job_id);
                                     fetch_logs_async(repo, run_id, job_id, &title, tx);
@@ -222,17 +268,29 @@ async fn run_app(
                         Action::CloseOverlay => state.close_log_overlay(),
                         Action::ScrollUp => state.scroll_log_up(1),
                         Action::ScrollDown => {
-                            let h = terminal.size().map(|s| s.height as usize * 8 / 10).unwrap_or(20).saturating_sub(2);
+                            let h = terminal
+                                .size()
+                                .map(|s| s.height as usize * 8 / 10)
+                                .unwrap_or(20)
+                                .saturating_sub(2);
                             state.scroll_log_down(1, h);
                         }
                         Action::PageUp => state.scroll_log_up(20),
                         Action::PageDown => {
-                            let h = terminal.size().map(|s| s.height as usize * 8 / 10).unwrap_or(20).saturating_sub(2);
+                            let h = terminal
+                                .size()
+                                .map(|s| s.height as usize * 8 / 10)
+                                .unwrap_or(20)
+                                .saturating_sub(2);
                             state.scroll_log_down(20, h);
                         }
                         Action::ScrollToTop => state.scroll_log_to_top(),
                         Action::ScrollToBottom => {
-                            let h = terminal.size().map(|s| s.height as usize * 8 / 10).unwrap_or(20).saturating_sub(2);
+                            let h = terminal
+                                .size()
+                                .map(|s| s.height as usize * 8 / 10)
+                                .unwrap_or(20)
+                                .saturating_sub(2);
                             state.scroll_log_to_bottom(h);
                         }
                         Action::CopyToClipboard => {
@@ -277,6 +335,7 @@ async fn run_app(
                 AppEvent::PollResult(new_runs) => {
                     state.is_loading = false;
                     state.clear_error();
+                    state.run_errors.clear();
 
                     let old_snapshot = if state.desktop_notify {
                         Some(state.previous_snapshot.clone())
@@ -338,7 +397,12 @@ async fn run_app(
                     }
                     state.rebuild_tree();
                 }
-                AppEvent::FailedLogResult { run_id, job_id, title, content } => {
+                AppEvent::FailedLogResult {
+                    run_id,
+                    job_id,
+                    title,
+                    content,
+                } => {
                     // Cache the result
                     state.log_cache.insert(
                         (run_id, job_id),
@@ -347,7 +411,7 @@ async fn run_app(
                             fetched_at: Instant::now(),
                         },
                     );
-                    state.open_log_overlay(title, content, run_id, job_id);
+                    state.open_log_overlay(title, &content, run_id, job_id);
                 }
                 AppEvent::ClipboardResult(ok) => {
                     if ok {
@@ -359,6 +423,18 @@ async fn run_app(
                     } else {
                         state.set_error("Failed to copy to clipboard".to_string());
                     }
+                }
+                AppEvent::RerunSuccess(run_id) => {
+                    state.log_cache.retain(|(r, _), _| *r != run_id);
+                    state.notifications.push(app::Notification {
+                        run_id,
+                        message: "Rerun triggered".to_string(),
+                        timestamp: Instant::now(),
+                    });
+                }
+                AppEvent::RunError { run_id, error } => {
+                    state.run_errors.insert(run_id, error);
+                    state.rebuild_tree();
                 }
                 AppEvent::Error(e) => {
                     state.is_loading = false;

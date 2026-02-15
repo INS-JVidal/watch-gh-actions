@@ -12,15 +12,28 @@ pub enum AppEvent {
     Key(KeyEvent),
     Tick,
     PollResult(Vec<WorkflowRun>),
-    JobsResult { run_id: u64, jobs: Vec<Job> },
-    FailedLogResult { run_id: u64, job_id: Option<u64>, title: String, content: String },
+    JobsResult {
+        run_id: u64,
+        jobs: Vec<Job>,
+    },
+    FailedLogResult {
+        run_id: u64,
+        job_id: Option<u64>,
+        title: String,
+        content: String,
+    },
     ClipboardResult(bool),
+    RerunSuccess(u64),
+    RunError {
+        run_id: u64,
+        error: String,
+    },
     Error(String),
 }
 
 pub struct EventHandler {
     rx: mpsc::UnboundedReceiver<AppEvent>,
-    _tx: mpsc::UnboundedSender<AppEvent>,
+    tx: mpsc::UnboundedSender<AppEvent>,
     shutdown: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -28,7 +41,7 @@ pub struct EventHandler {
 impl EventHandler {
     pub fn new(tick_rate: Duration) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        let event_tx = tx.clone();
+        let eventtx = tx.clone();
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_flag = shutdown.clone();
 
@@ -36,11 +49,11 @@ impl EventHandler {
             while !shutdown_flag.load(Ordering::Relaxed) {
                 if event::poll(tick_rate).unwrap_or(false) {
                     if let Ok(CrosstermEvent::Key(key)) = event::read() {
-                        if event_tx.send(AppEvent::Key(key)).is_err() {
+                        if eventtx.send(AppEvent::Key(key)).is_err() {
                             break;
                         }
                     }
-                } else if event_tx.send(AppEvent::Tick).is_err() {
+                } else if eventtx.send(AppEvent::Tick).is_err() {
                     break;
                 }
             }
@@ -48,14 +61,14 @@ impl EventHandler {
 
         Self {
             rx,
-            _tx: tx,
+            tx,
             shutdown,
             thread: Some(thread),
         }
     }
 
     pub fn sender(&self) -> mpsc::UnboundedSender<AppEvent> {
-        self._tx.clone()
+        self.tx.clone()
     }
 
     pub async fn next(&mut self) -> Option<AppEvent> {

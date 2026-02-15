@@ -1,8 +1,8 @@
 use crate::app::WorkflowRun;
-use crate::cli::Cli;
+use crate::cli::{self, Cli};
 use crate::gh;
 use crate::tui::spinner;
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{eyre, Result};
 use ratatui::backend::Backend;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Style};
@@ -32,11 +32,7 @@ pub struct StartupResult {
     pub runs: Vec<WorkflowRun>,
 }
 
-fn render_startup<B: Backend>(
-    terminal: &mut Terminal<B>,
-    phases: &[StartupPhase],
-    frame: usize,
-) {
+fn render_startup<B: Backend>(terminal: &mut Terminal<B>, phases: &[StartupPhase], frame: usize) {
     let _ = terminal.draw(|f| {
         let area = f.area();
         let total_lines = phases.len() as u16;
@@ -64,7 +60,7 @@ fn render_startup<B: Backend>(
                 };
 
                 let mut spans = vec![
-                    Span::styled(format!("  {} ", icon), icon_style),
+                    Span::styled(format!("  {icon} "), icon_style),
                     Span::styled(&phase.label, Style::default().fg(Color::White)),
                 ];
 
@@ -166,6 +162,9 @@ pub async fn run_startup<B: Backend>(
         repo
     };
 
+    // Validate repo format
+    cli::validate_repo_format(&repo).map_err(|e| eyre!("{e}"))?;
+
     // Phase 3: Detect branch (non-fatal)
     let branch = if let Some(ref b) = args.branch {
         let branch = b.clone();
@@ -184,20 +183,17 @@ pub async fn run_startup<B: Backend>(
             gh::executor::detect_branch(),
         )
         .await;
-        match result {
-            Ok(b) => {
-                let idx = phases.len() - 1;
-                phases[idx].detail = Some(b.clone());
-                render_startup(terminal, &phases, 0);
-                Some(b)
-            }
-            Err(_) => {
-                // Non-fatal: mark as done with no detail
-                let idx = phases.len() - 1;
-                phases[idx].status = PhaseStatus::Done;
-                render_startup(terminal, &phases, 0);
-                None
-            }
+        if let Ok(b) = result {
+            let idx = phases.len() - 1;
+            phases[idx].detail = Some(b.clone());
+            render_startup(terminal, &phases, 0);
+            Some(b)
+        } else {
+            // Non-fatal: mark as done with no detail
+            let idx = phases.len() - 1;
+            phases[idx].status = PhaseStatus::Done;
+            render_startup(terminal, &phases, 0);
+            None
         }
     };
 

@@ -10,11 +10,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &AppState) {
     let narrow = area.width < crate::app::NARROW_WIDTH_THRESHOLD;
 
     let hints: &[(&str, &str)] = if state.has_log_overlay() {
-        &[
-            ("j/k", "scroll"),
-            ("y", "copy"),
-            ("q", "close"),
-        ]
+        &[("j/k", "scroll"), ("y", "copy"), ("q", "close")]
     } else if narrow {
         &[
             ("j/k", "nav"),
@@ -52,7 +48,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &AppState) {
             }
             spans.push(Span::styled(*key, Style::default().fg(Color::Cyan)));
             spans.push(Span::styled(
-                format!(" {}", desc),
+                format!(" {desc}"),
                 Style::default().fg(Color::DarkGray),
             ));
         }

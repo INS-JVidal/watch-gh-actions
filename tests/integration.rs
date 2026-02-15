@@ -1,9 +1,7 @@
 mod fixtures;
 
 use fixtures::*;
-use ghw::app::{
-    AppState, Conclusion, FilterMode, ResolvedItem, RunStatus, TreeLevel,
-};
+use ghw::app::{AppState, Conclusion, FilterMode, ResolvedItem, RunStatus, TreeLevel};
 use ghw::diff;
 use ghw::gh::parser;
 use ghw::input::{self, Action};
@@ -148,7 +146,10 @@ fn change_detection_across_poll_cycles() {
     // Cycle 1: First poll, no notifications
     let runs1 = vec![run_in_progress(1)];
     diff::detect_changes(&mut state, &runs1);
-    assert!(state.notifications.is_empty(), "First poll should produce no notifications");
+    assert!(
+        state.notifications.is_empty(),
+        "First poll should produce no notifications"
+    );
 
     // Cycle 2: Status change -> notification
     let mut run_completed = run_with_id(1);
@@ -156,8 +157,14 @@ fn change_detection_across_poll_cycles() {
     run_completed.conclusion = Some(Conclusion::Success);
     let runs2 = vec![run_completed];
     diff::detect_changes(&mut state, &runs2);
-    assert_eq!(state.notifications.len(), 1, "Status change should produce notification");
-    assert!(state.notifications[0].message.contains("completed successfully"));
+    assert_eq!(
+        state.notifications.len(),
+        1,
+        "Status change should produce notification"
+    );
+    assert!(state.notifications[0]
+        .message
+        .contains("completed successfully"));
 
     // Cycle 3: Same status -> no new notification
     let mut run_still_completed = run_with_id(1);
@@ -165,16 +172,16 @@ fn change_detection_across_poll_cycles() {
     run_still_completed.conclusion = Some(Conclusion::Success);
     let runs3 = vec![run_still_completed];
     diff::detect_changes(&mut state, &runs3);
-    assert_eq!(state.notifications.len(), 1, "Same status should not add notification");
+    assert_eq!(
+        state.notifications.len(),
+        1,
+        "Same status should not add notification"
+    );
 }
 
 #[test]
 fn input_to_state_action_flow() {
-    let mut state = make_state_with_runs(vec![
-        run_with_id(1),
-        run_with_id(2),
-        run_with_id(3),
-    ]);
+    let mut state = make_state_with_runs(vec![run_with_id(1), run_with_id(2), run_with_id(3)]);
 
     // Map key 'j' -> MoveDown
     let action = input::map_key(press(KeyCode::Char('j')), false, false, false);
@@ -235,7 +242,7 @@ fn log_overlay_lifecycle() {
 
     // Open overlay
     let content = "error: test failed\nassert_eq failed at line 42".to_string();
-    state.open_log_overlay("CI Build #1".to_string(), content.clone(), 1, None);
+    state.open_log_overlay("CI Build #1".to_string(), &content, 1, None);
     assert!(state.has_log_overlay());
     assert_eq!(state.log_overlay_text(), Some(content));
 
@@ -259,9 +266,125 @@ fn log_overlay_lifecycle() {
     assert_eq!(action, Action::ViewLogs);
 
     // Overlay mode: 'e' closes
-    state.open_log_overlay("test".to_string(), "log".to_string(), 1, Some(10));
+    state.open_log_overlay("test".to_string(), "log", 1, Some(10));
     let action = input::map_key(press(KeyCode::Char('e')), false, false, true);
     assert_eq!(action, Action::CloseOverlay);
+}
+
+// ========== TUI snapshot tests ==========
+
+#[test]
+fn tui_header_contains_repo_name() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let state = make_state_with_runs(vec![run_with_id(1)]);
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    terminal
+        .draw(|f| {
+            ghw::tui::render::render(f, &state);
+        })
+        .unwrap();
+
+    let buffer = terminal.backend().buffer().clone();
+    let text: String = (0..buffer.area.width)
+        .map(|x| buffer.cell((x, 0)).unwrap().symbol().to_string())
+        .collect();
+    assert!(
+        text.contains("test/repo"),
+        "Header should contain repo name, got: {text}"
+    );
+}
+
+#[test]
+fn tui_footer_contains_key_hints() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let state = make_state_with_runs(vec![run_with_id(1)]);
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    terminal
+        .draw(|f| {
+            ghw::tui::render::render(f, &state);
+        })
+        .unwrap();
+
+    let buffer = terminal.backend().buffer().clone();
+    // Footer is at the last 2 rows; key hints are on the last content row (row 23)
+    let footer_row = buffer.area.height - 1;
+    let text: String = (0..buffer.area.width)
+        .map(|x| buffer.cell((x, footer_row)).unwrap().symbol().to_string())
+        .collect();
+    assert!(
+        text.contains("navigate"),
+        "Footer should contain 'navigate' hint, got: {text}"
+    );
+}
+
+#[test]
+fn tui_tree_renders_run_titles() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let state = make_state_with_runs(vec![run_with_id(1), run_with_id(2)]);
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    terminal
+        .draw(|f| {
+            ghw::tui::render::render(f, &state);
+        })
+        .unwrap();
+
+    let buffer = terminal.backend().buffer().clone();
+    // Tree area starts at row 2 (after 2-row header)
+    let mut tree_text = String::new();
+    for y in 2..buffer.area.height.saturating_sub(2) {
+        for x in 0..buffer.area.width {
+            tree_text.push_str(buffer.cell((x, y)).unwrap().symbol());
+        }
+        tree_text.push('\n');
+    }
+    assert!(
+        tree_text.contains("CI Build #1"),
+        "Tree should contain run title 'CI Build #1', got: {tree_text}"
+    );
+    assert!(
+        tree_text.contains("CI Build #2"),
+        "Tree should contain run title 'CI Build #2', got: {tree_text}"
+    );
+}
+
+#[test]
+fn tui_empty_state_shows_no_runs_message() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let state = make_state_with_runs(vec![]);
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    terminal
+        .draw(|f| {
+            ghw::tui::render::render(f, &state);
+        })
+        .unwrap();
+
+    let buffer = terminal.backend().buffer().clone();
+    let mut all_text = String::new();
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            all_text.push_str(buffer.cell((x, y)).unwrap().symbol());
+        }
+    }
+    assert!(
+        all_text.contains("No workflow runs found"),
+        "Empty state should show 'No workflow runs found', got: {all_text}"
+    );
 }
 
 // ========== Live gh CLI tests (ignored by default) ==========
