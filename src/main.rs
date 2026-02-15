@@ -12,7 +12,7 @@ use clap::Parser;
 use cli::Cli;
 use color_eyre::eyre::Result;
 use crossterm::execute;
-use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen, SetTitle};
 use events::{AppEvent, EventHandler};
 use gh::poller::{self, Poller};
 use input::Action;
@@ -56,6 +56,7 @@ async fn main() -> Result<()> {
     };
 
     let repo = startup_result.repo;
+    execute!(io::stdout(), SetTitle(format!("watching {}", repo)))?;
     let branch = startup_result.branch;
 
     let mut state = AppState::new(repo.clone(), branch, args.limit, args.workflow.clone());
