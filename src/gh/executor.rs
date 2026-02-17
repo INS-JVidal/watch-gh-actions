@@ -90,21 +90,42 @@ pub async fn fetch_jobs(repo: &str, run_id: u64) -> Result<String> {
 }
 
 pub fn open_in_browser(url: &str) -> Result<()> {
-    let (cmd, args): (&str, Vec<&str>) = if cfg!(target_os = "macos") {
-        ("open", vec![url])
-    } else if cfg!(target_os = "windows") {
-        ("cmd", vec!["/C", "start", url])
+    use std::process::{Command, Stdio};
+
+    if cfg!(target_os = "windows") {
+        return Command::new("cmd")
+            .args(["/C", "start", url])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| eyre!("Failed to open browser: {e}"));
+    }
+
+    let cmds: &[&str] = if cfg!(target_os = "macos") {
+        &["open"]
     } else {
-        ("xdg-open", vec![url])
+        &["wslview", "xdg-open"]
     };
-    std::process::Command::new(cmd)
-        .args(&args)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| eyre!("Failed to open browser: {}", e))?;
-    Ok(())
+
+    for cmd in cmds {
+        match Command::new(cmd)
+            .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(_) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(eyre!("Failed to open browser with {cmd}: {e}")),
+        }
+    }
+
+    Err(eyre!(
+        "No browser opener found. Install wslview (wslu) or xdg-open."
+    ))
 }
 
 pub async fn rerun_workflow(repo: &str, run_id: u64) -> Result<()> {
