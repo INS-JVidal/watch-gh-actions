@@ -1,32 +1,4 @@
 #!/bin/sh
-
-remote="$1"
-branch=$(git symbolic-ref --short HEAD)
-
-# Pull any remote changes (e.g. CI MINOR bumps)
-git pull --rebase --no-verify "$remote" "$branch" 2>/dev/null
-
-# Parse current version from Cargo.toml
-current=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-major=$(echo "$current" | cut -d. -f1)
-minor=$(echo "$current" | cut -d. -f2)
-patch=$(echo "$current" | cut -d. -f3)
-
-# Bump patch
-new_patch=$((patch + 1))
-new_version="$major.$minor.$new_patch"
-
-sed -i "s/^version = \"$current\"/version = \"$new_version\"/" Cargo.toml
-git add Cargo.toml
-git commit --no-verify -m "chore: bump patch to $new_version"
-
-# Push (including the version bump commit)
-if git push --no-verify "$remote" "$branch"; then
-    echo "Pushed with patch bump: $current -> $new_version"
-else
-    echo "ERROR: failed to push version bump" >&2
-    exit 1
-fi
-
-# Exit 0 so git doesn't report an error — our push already included everything
+# No-op: version bumping is handled by `git pushb` alias.
+# See .githooks/pushb.sh
 exit 0
