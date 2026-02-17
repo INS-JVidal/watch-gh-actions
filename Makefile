@@ -2,7 +2,7 @@ PREFIX ?= $(HOME)/.local
 BINDIR := $(PREFIX)/bin
 BINARY := ghw
 
-.PHONY: build install uninstall clean clean-runs
+.PHONY: build install uninstall clean clean-runs setup
 
 build:
 	cargo build --release
@@ -16,6 +16,10 @@ uninstall:
 
 clean:
 	cargo clean
+
+setup:
+	git config core.hooksPath .githooks
+	git config alias.pushb '!bash -c '"'"'cd $$(git rev-parse --show-toplevel) && .githooks/pushb.sh "$$@"'"'"' --'
 
 clean-runs:
 	@echo "Deleting workflow runs older than 7 days..."
