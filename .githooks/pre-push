@@ -21,12 +21,12 @@ git add Cargo.toml
 git commit --no-verify -m "chore: bump patch to $new_version"
 
 # Push (including the version bump commit)
-git push --no-verify "$remote" "$branch"
-push_status=$?
-
-if [ $push_status -eq 0 ]; then
+if git push --no-verify "$remote" "$branch"; then
     echo "Pushed with patch bump: $current -> $new_version"
+else
+    echo "ERROR: failed to push version bump" >&2
+    exit 1
 fi
 
-# Cancel the original push (we already pushed)
-exit 1
+# Exit 0 so git doesn't report an error — our push already included everything
+exit 0
