@@ -97,8 +97,11 @@ pub fn open_in_browser(url: &str) -> Result<()> {
     } else {
         ("xdg-open", vec![url])
     };
-    Command::new(cmd)
+    std::process::Command::new(cmd)
         .args(&args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(|e| eyre!("Failed to open browser: {}", e))?;
     Ok(())
