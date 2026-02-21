@@ -105,8 +105,10 @@ pub fn open_in_browser(url: &str) -> Result<()> {
 
     let cmds: &[&str] = if cfg!(target_os = "macos") {
         &["open"]
+    } else if std::env::var_os("WSL_DISTRO_NAME").is_some() {
+        &["wslview"]
     } else {
-        &["wslview", "xdg-open"]
+        &["xdg-open"]
     };
 
     for cmd in cmds {
@@ -118,13 +120,13 @@ pub fn open_in_browser(url: &str) -> Result<()> {
             .spawn()
         {
             Ok(_) => return Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(eyre!("Failed to open browser with {cmd}: {e}")),
         }
     }
 
     Err(eyre!(
-        "No browser opener found. Install wslview (wslu) or xdg-open."
+        "No browser opener found. On WSL install wslu; on Linux install xdg-utils."
     ))
 }
 

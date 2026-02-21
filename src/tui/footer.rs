@@ -11,10 +11,13 @@ pub fn render(f: &mut Frame, area: Rect, state: &AppState) {
 
     let hints: &[(&str, &str)] = if state.has_log_overlay() {
         &[("j/k", "scroll"), ("y", "copy"), ("q", "close")]
+    } else if state.has_detail_overlay() {
+        &[("d/q", "close")]
     } else if narrow {
         &[
             ("j/k", "nav"),
             ("l/h", "exp/col"),
+            ("d", "detail"),
             ("e", "err"),
             ("o", "open"),
             ("r", "refresh"),
@@ -25,6 +28,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &AppState) {
             ("↑↓/jk", "navigate"),
             ("→/l/Enter", "expand"),
             ("←/h", "collapse"),
+            ("d", "details"),
             ("e", "errors"),
             ("o", "open"),
             ("r", "refresh"),

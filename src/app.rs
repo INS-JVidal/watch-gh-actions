@@ -95,6 +95,10 @@ pub struct Step {
     pub status: RunStatus,
     pub conclusion: Option<Conclusion>,
     pub number: u64,
+    #[serde(default, rename = "startedAt")]
+    pub started_at: Option<DateTime<Utc>>,
+    #[serde(default, rename = "completedAt")]
+    pub completed_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,6 +170,11 @@ pub struct LogOverlay {
     pub job_id: Option<u64>,
 }
 
+pub struct DetailOverlay {
+    pub title: String,
+    pub lines: Vec<(String, String)>,
+}
+
 /// Immutable configuration set at startup.
 pub struct AppConfig {
     pub repo: String,
@@ -203,6 +212,9 @@ pub struct AppState {
     // Log overlay
     pub log_cache: HashMap<(u64, Option<u64>), FailedLog>,
     pub log_overlay: Option<LogOverlay>,
+
+    // Detail overlay
+    pub detail_overlay: Option<DetailOverlay>,
 
     // Per-run errors (e.g. job-fetch failures)
     pub run_errors: HashMap<u64, String>,
@@ -242,6 +254,7 @@ impl AppState {
             should_quit: false,
             log_cache: HashMap::new(),
             log_overlay: None,
+            detail_overlay: None,
             run_errors: HashMap::new(),
             desktop_notify: true,
         }
@@ -612,6 +625,20 @@ impl AppState {
         }
     }
 
+    // --- Detail overlay methods ---
+
+    pub fn has_detail_overlay(&self) -> bool {
+        self.detail_overlay.is_some()
+    }
+
+    pub fn open_detail_overlay(&mut self, title: String, lines: Vec<(String, String)>) {
+        self.detail_overlay = Some(DetailOverlay { title, lines });
+    }
+
+    pub fn close_detail_overlay(&mut self) {
+        self.detail_overlay = None;
+    }
+
     pub fn current_item_ids(&self) -> Option<(u64, Option<u64>)> {
         let item = self.tree_items.get(self.cursor)?;
         let run = self.runs.get(item.run_idx)?;
@@ -689,12 +716,16 @@ mod tests {
                     status: RunStatus::Completed,
                     conclusion: Some(Conclusion::Success),
                     number: 1,
+                    started_at: None,
+                    completed_at: None,
                 },
                 Step {
                     name: "Build".to_string(),
                     status: RunStatus::Completed,
                     conclusion: Some(Conclusion::Success),
                     number: 2,
+                    started_at: None,
+                    completed_at: None,
                 },
             ],
         }

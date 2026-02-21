@@ -47,4 +47,9 @@ pub fn render(f: &mut Frame, state: &AppState) {
     if let Some(ref overlay) = state.log_overlay {
         crate::tui::log_overlay::render(f, overlay);
     }
+
+    // Detail overlay (drawn on top of everything)
+    if let Some(ref overlay) = state.detail_overlay {
+        crate::tui::detail_overlay::render(f, overlay);
+    }
 }

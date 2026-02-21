@@ -70,7 +70,7 @@ async fn main() -> Result<()> {
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         let _ = terminal::disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, SetTitle(""));
         original_hook(panic_info);
     }));
 
@@ -87,7 +87,7 @@ async fn main() -> Result<()> {
         Err(e) => {
             // Restore terminal before printing error
             terminal::disable_raw_mode()?;
-            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+            execute!(terminal.backend_mut(), LeaveAlternateScreen, SetTitle(""))?;
             terminal.show_cursor()?;
             eprintln!("Error: {}", e);
             std::process::exit(1);
@@ -133,7 +133,7 @@ async fn main() -> Result<()> {
 
     // Restore terminal
     terminal::disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, SetTitle(""))?;
     terminal.show_cursor()?;
 
     result
@@ -171,6 +171,7 @@ async fn run_app(
                         state.error.is_some(),
                         state.is_loading,
                         state.has_log_overlay(),
+                        state.has_detail_overlay(),
                     ) {
                         Action::Quit => state.should_quit = true,
                         Action::DismissError => state.clear_error(),
@@ -265,7 +266,10 @@ async fn run_app(
                                 }
                             }
                         }
-                        Action::CloseOverlay => state.close_log_overlay(),
+                        Action::CloseOverlay => {
+                            state.close_log_overlay();
+                            state.close_detail_overlay();
+                        }
                         Action::ScrollUp => state.scroll_log_up(1),
                         Action::ScrollDown => {
                             let h = terminal
@@ -300,6 +304,15 @@ async fn run_app(
                                     let ok = gh::executor::copy_to_clipboard(&text).await.is_ok();
                                     let _ = tx2.send(AppEvent::ClipboardResult(ok));
                                 });
+                            }
+                        }
+                        Action::ShowDetails => {
+                            if let Some(item) = state.tree_items.get(state.cursor).cloned() {
+                                if let Some(resolved) = state.resolve_item(&item) {
+                                    let (title, lines) =
+                                        build_detail_lines(&resolved, state, item.run_idx);
+                                    state.open_detail_overlay(title, lines);
+                                }
                             }
                         }
                         Action::CycleFilter => state.cycle_filter(),
@@ -468,6 +481,126 @@ fn build_log_title(state: &AppState, run_id: u64, job_id: Option<u64>) -> String
         format!("{} > {}", run_name, job_name)
     } else {
         run_name.to_string()
+    }
+}
+
+fn format_duration_detail(secs: i64) -> String {
+    let secs = secs.max(0);
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else {
+        format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
+    }
+}
+
+fn build_detail_lines(
+    resolved: &app::ResolvedItem<'_>,
+    state: &AppState,
+    run_idx: usize,
+) -> (String, Vec<(String, String)>) {
+    match resolved {
+        app::ResolvedItem::Run(run) => {
+            let title = format!("Run #{}", run.number);
+            let conclusion_str = run.conclusion.map_or("-".into(), |c| format!("{c:?}"));
+            let duration = {
+                let elapsed = chrono::Utc::now().signed_duration_since(run.created_at);
+                format_duration_detail(elapsed.num_seconds())
+            };
+            let lines = vec![
+                ("Title".into(), run.display_title.clone()),
+                ("Workflow".into(), run.name.clone()),
+                ("Branch".into(), run.head_branch.clone()),
+                ("Event".into(), run.event.clone()),
+                ("Status".into(), format!("{:?}", run.status)),
+                ("Conclusion".into(), conclusion_str),
+                ("Duration".into(), duration),
+                (
+                    "Created".into(),
+                    run.created_at.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+                ),
+                (
+                    "Updated".into(),
+                    run.updated_at.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+                ),
+                ("URL".into(), run.url.clone()),
+            ];
+            (title, lines)
+        }
+        app::ResolvedItem::Job(job) => {
+            let title = format!("Job: {}", job.name);
+            let conclusion_str = job.conclusion.map_or("-".into(), |c| format!("{c:?}"));
+            let mut lines = vec![
+                ("Name".into(), job.name.clone()),
+                ("Status".into(), format!("{:?}", job.status)),
+                ("Conclusion".into(), conclusion_str),
+            ];
+            if let Some(started) = job.started_at {
+                lines.push((
+                    "Started".into(),
+                    started.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+                ));
+            }
+            if let Some(completed) = job.completed_at {
+                lines.push((
+                    "Completed".into(),
+                    completed.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+                ));
+            }
+            if let (Some(s), Some(e)) = (job.started_at, job.completed_at) {
+                let d = e.signed_duration_since(s).num_seconds();
+                lines.push(("Duration".into(), format_duration_detail(d)));
+            } else if let Some(s) = job.started_at {
+                let d = chrono::Utc::now().signed_duration_since(s).num_seconds();
+                lines.push((
+                    "Duration".into(),
+                    format!("{} (running)", format_duration_detail(d)),
+                ));
+            }
+            lines.push(("URL".into(), job.url.clone()));
+            // Show parent run info
+            if let Some(run) = state.runs.get(run_idx) {
+                lines.push((
+                    "Run".into(),
+                    format!("#{} {}", run.number, run.display_title),
+                ));
+            }
+            (title, lines)
+        }
+        app::ResolvedItem::Step(step) => {
+            let title = format!("Step #{}: {}", step.number, step.name);
+            let conclusion_str = step.conclusion.map_or("-".into(), |c| format!("{c:?}"));
+            let mut lines = vec![
+                ("Name".into(), step.name.clone()),
+                ("Number".into(), step.number.to_string()),
+                ("Status".into(), format!("{:?}", step.status)),
+                ("Conclusion".into(), conclusion_str),
+            ];
+            if let Some(started) = step.started_at {
+                lines.push((
+                    "Started".into(),
+                    started.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+                ));
+            }
+            if let Some(completed) = step.completed_at {
+                lines.push((
+                    "Completed".into(),
+                    completed.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+                ));
+            }
+            if let (Some(s), Some(e)) = (step.started_at, step.completed_at) {
+                let d = e.signed_duration_since(s).num_seconds();
+                lines.push(("Duration".into(), format_duration_detail(d)));
+            } else if let Some(s) = step.started_at {
+                let d = chrono::Utc::now().signed_duration_since(s).num_seconds();
+                lines.push((
+                    "Duration".into(),
+                    format!("{} (running)", format_duration_detail(d)),
+                ));
+            }
+            (title, lines)
+        }
     }
 }
 

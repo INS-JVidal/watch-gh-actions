@@ -263,9 +263,26 @@ fn render_job_line(
 fn render_step_line(step: &crate::app::Step, is_selected: bool, max_width: usize) -> Line<'static> {
     let (icon, icon_color) = status_icon(step.status, step.conclusion);
 
+    let duration = match (step.started_at, step.completed_at) {
+        (Some(start), Some(end)) => {
+            let d = end.signed_duration_since(start);
+            format_duration(d.num_seconds())
+        }
+        (Some(start), None) => {
+            let d = Utc::now().signed_duration_since(start);
+            format_duration(d.num_seconds())
+        }
+        _ => String::new(),
+    };
+
     let prefix = format!("        {icon} ");
     let prefix_display_width = UnicodeWidthStr::width(prefix.as_str());
-    let name_max = max_width.saturating_sub(prefix_display_width);
+    let suffix_width = if duration.is_empty() {
+        0
+    } else {
+        duration.len() + 1
+    };
+    let name_max = max_width.saturating_sub(prefix_display_width + suffix_width);
     let name = truncate(&step.name, name_max);
 
     let select_style = if is_selected {
@@ -274,10 +291,19 @@ fn render_step_line(step: &crate::app::Step, is_selected: bool, max_width: usize
         Style::default()
     };
 
-    Line::from(vec![
+    let mut spans = vec![
         Span::styled(prefix, Style::default().fg(icon_color)),
         Span::styled(name, select_style),
-    ])
+    ];
+
+    if !duration.is_empty() {
+        spans.push(Span::styled(
+            format!(" {duration}"),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+
+    Line::from(spans)
 }
 
 fn render_loading_line(spinner_frame: usize, is_selected: bool) -> Line<'static> {

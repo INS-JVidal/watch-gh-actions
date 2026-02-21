@@ -64,6 +64,8 @@ pub fn default_step() -> Step {
         status: RunStatus::Completed,
         conclusion: Some(Conclusion::Success),
         number: 1,
+        started_at: None,
+        completed_at: None,
     }
 }
 

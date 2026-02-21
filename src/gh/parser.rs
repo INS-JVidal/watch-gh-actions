@@ -245,6 +245,40 @@ mod tests {
     }
 
     #[test]
+    fn parse_jobs_step_timestamps() {
+        let json = r#"{"jobs":[{
+            "name": "build", "status": "completed", "conclusion": "success",
+            "startedAt": "2024-01-01T00:00:00Z", "completedAt": "2024-01-01T00:05:00Z",
+            "url": "https://example.com",
+            "steps": [{
+                "name": "Checkout", "status": "completed", "conclusion": "success",
+                "number": 1,
+                "startedAt": "2024-01-01T00:00:00Z",
+                "completedAt": "2024-01-01T00:01:30Z"
+            }]
+        }]}"#;
+        let jobs = parse_jobs(json).unwrap();
+        assert!(jobs[0].steps[0].started_at.is_some());
+        assert!(jobs[0].steps[0].completed_at.is_some());
+    }
+
+    #[test]
+    fn parse_jobs_step_timestamps_missing() {
+        let json = r#"{"jobs":[{
+            "name": "build", "status": "completed", "conclusion": "success",
+            "startedAt": "2024-01-01T00:00:00Z", "completedAt": "2024-01-01T00:05:00Z",
+            "url": "https://example.com",
+            "steps": [{
+                "name": "Checkout", "status": "completed", "conclusion": "success",
+                "number": 1
+            }]
+        }]}"#;
+        let jobs = parse_jobs(json).unwrap();
+        assert!(jobs[0].steps[0].started_at.is_none());
+        assert!(jobs[0].steps[0].completed_at.is_none());
+    }
+
+    #[test]
     fn parse_jobs_null_timestamps() {
         let json = r#"{"jobs":[{
             "name": "build", "status": "queued", "conclusion": null,
