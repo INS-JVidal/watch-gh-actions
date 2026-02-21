@@ -11,7 +11,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &AppState) {
     let narrow = area.width < crate::app::NARROW_WIDTH_THRESHOLD;
     let inner_width = area.width.saturating_sub(2) as usize;
 
-    if state.tree_items.is_empty() && !state.is_loading {
+    if state.tree_items.is_empty() && !state.is_loading() {
         let msg = match state.filter {
             crate::app::FilterMode::ActiveOnly => "No active runs",
             crate::app::FilterMode::CurrentBranch => "No runs for current branch",
@@ -26,6 +26,9 @@ pub fn render(f: &mut Frame, area: Rect, state: &AppState) {
 
     // Calculate visible window (scroll)
     let visible_height = area.height as usize;
+    if visible_height == 0 {
+        return;
+    }
     let scroll_offset = if state.cursor >= visible_height {
         state.cursor - visible_height + 1
     } else {

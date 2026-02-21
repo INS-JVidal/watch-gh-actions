@@ -19,6 +19,7 @@ pub fn backoff_delay(base_interval: u64, failures: u32) -> u64 {
     base_interval
         .saturating_mul(multiplier)
         .min(MAX_BACKOFF_SECS)
+        .max(1)
 }
 
 impl Poller {
@@ -103,11 +104,28 @@ pub async fn fetch_jobs_for_run(repo: &str, run_id: u64, tx: &mpsc::UnboundedSen
                 });
             }
         },
-        Err(e) => {
-            let _ = tx.send(AppEvent::RunError {
-                run_id,
-                error: format!("{e}"),
-            });
+        Err(first_err) => {
+            // Single retry after 2s for transient network failures
+            time::sleep(time::Duration::from_secs(2)).await;
+            match executor::fetch_jobs(repo, run_id).await {
+                Ok(json) => match parser::parse_jobs(&json) {
+                    Ok(jobs) => {
+                        let _ = tx.send(AppEvent::JobsResult { run_id, jobs });
+                    }
+                    Err(e) => {
+                        let _ = tx.send(AppEvent::RunError {
+                            run_id,
+                            error: format!("Job parse error: {e}"),
+                        });
+                    }
+                },
+                Err(_) => {
+                    let _ = tx.send(AppEvent::RunError {
+                        run_id,
+                        error: format!("{first_err}"),
+                    });
+                }
+            }
         }
     }
 }
@@ -147,7 +165,7 @@ mod tests {
     }
 
     #[test]
-    fn backoff_base_zero_stays_zero() {
-        assert_eq!(backoff_delay(0, 5), 0);
+    fn backoff_base_zero_floors_to_one() {
+        assert_eq!(backoff_delay(0, 5), 1);
     }
 }

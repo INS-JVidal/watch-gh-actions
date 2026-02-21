@@ -1,11 +1,17 @@
 use crate::app::{AppState, Notification, RunStatus, WorkflowRun};
-use std::collections::HashMap;
+
+/// Maximum number of polls a run can be absent before being evicted from the snapshot.
+const SNAPSHOT_EVICTION_POLLS: u64 = 10;
 
 pub fn detect_changes(state: &mut AppState, new_runs: &[WorkflowRun]) {
     let now = std::time::Instant::now();
+    state.poll_count += 1;
+    let current_poll = state.poll_count;
 
     for run in new_runs {
-        if let Some(&(old_status, old_conclusion)) = state.previous_snapshot.get(&run.database_id) {
+        if let Some(&(old_status, old_conclusion, _)) =
+            state.previous_snapshot.get(&run.database_id)
+        {
             if old_status != run.status || old_conclusion != run.conclusion {
                 let msg = match (run.status, run.conclusion) {
                     (RunStatus::Completed, Some(crate::app::Conclusion::Success)) => {
@@ -33,12 +39,17 @@ pub fn detect_changes(state: &mut AppState, new_runs: &[WorkflowRun]) {
         }
     }
 
-    // Update snapshot
-    let mut new_snapshot = HashMap::new();
+    // Merge new runs into existing snapshot (instead of replacing)
     for run in new_runs {
-        new_snapshot.insert(run.database_id, (run.status, run.conclusion));
+        state
+            .previous_snapshot
+            .insert(run.database_id, (run.status, run.conclusion, current_poll));
     }
-    state.previous_snapshot = new_snapshot;
+
+    // Evict entries not seen in the last SNAPSHOT_EVICTION_POLLS polls
+    state
+        .previous_snapshot
+        .retain(|_, (_, _, last_seen)| current_poll.saturating_sub(*last_seen) <= SNAPSHOT_EVICTION_POLLS);
 }
 
 #[cfg(test)]
@@ -196,16 +207,31 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_replaces_old_runs() {
+    fn snapshot_merges_and_retains_old_runs() {
         let mut state = make_state();
         let runs1 = vec![make_run(1, RunStatus::InProgress, None)];
         detect_changes(&mut state, &runs1);
 
-        // Run 1 disappears, run 2 appears
+        // Run 1 disappears, run 2 appears — run 1 still retained (not yet evicted)
         let runs2 = vec![make_run(2, RunStatus::Queued, None)];
         detect_changes(&mut state, &runs2);
-        assert!(!state.previous_snapshot.contains_key(&1));
+        assert!(state.previous_snapshot.contains_key(&1));
         assert!(state.previous_snapshot.contains_key(&2));
+    }
+
+    #[test]
+    fn snapshot_evicts_after_threshold() {
+        let mut state = make_state();
+        let runs1 = vec![make_run(1, RunStatus::InProgress, None)];
+        detect_changes(&mut state, &runs1);
+
+        // Poll 11 more times without run 1
+        for i in 2..=12 {
+            let runs = vec![make_run(i, RunStatus::Queued, None)];
+            detect_changes(&mut state, &runs);
+        }
+        // Run 1 should be evicted after 10+ polls without seeing it
+        assert!(!state.previous_snapshot.contains_key(&1));
     }
 
     #[test]

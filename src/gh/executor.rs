@@ -64,7 +64,10 @@ pub async fn detect_branch() -> Result<String> {
     .map_err(|e| eyre!("Failed to detect branch: {}", e))?;
 
     if !output.status.success() {
-        return Err(eyre!("Failed to detect branch"));
+        return Err(eyre!(
+            "Failed to detect branch: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
@@ -136,15 +139,30 @@ pub async fn rerun_workflow(repo: &str, run_id: u64) -> Result<()> {
     Ok(())
 }
 
+const LOG_SIZE_LIMIT: usize = 10 * 1024 * 1024; // 10 MB
+
+fn check_log_size(log: &str) -> Result<()> {
+    if log.len() > LOG_SIZE_LIMIT {
+        return Err(eyre!(
+            "Log output too large ({:.1} MB, max {} MB)",
+            log.len() as f64 / (1024.0 * 1024.0),
+            LOG_SIZE_LIMIT / (1024 * 1024)
+        ));
+    }
+    Ok(())
+}
+
 pub async fn fetch_failed_logs(repo: &str, run_id: u64) -> Result<String> {
     let run_id_str = run_id.to_string();
-    run_gh(&["run", "view", "--repo", repo, &run_id_str, "--log-failed"]).await
+    let result = run_gh(&["run", "view", "--repo", repo, &run_id_str, "--log-failed"]).await?;
+    check_log_size(&result)?;
+    Ok(result)
 }
 
 pub async fn fetch_failed_logs_for_job(repo: &str, run_id: u64, job_id: u64) -> Result<String> {
     let run_id_str = run_id.to_string();
     let job_id_str = job_id.to_string();
-    run_gh(&[
+    let result = run_gh(&[
         "run",
         "view",
         "--repo",
@@ -154,7 +172,9 @@ pub async fn fetch_failed_logs_for_job(repo: &str, run_id: u64, job_id: u64) -> 
         "--job",
         &job_id_str,
     ])
-    .await
+    .await?;
+    check_log_size(&result)?;
+    Ok(result)
 }
 
 pub async fn copy_to_clipboard(text: &str) -> Result<()> {

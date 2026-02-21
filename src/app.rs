@@ -175,6 +175,12 @@ pub struct DetailOverlay {
     pub lines: Vec<(String, String)>,
 }
 
+pub enum ActiveOverlay {
+    None,
+    Log(LogOverlay),
+    Detail(DetailOverlay),
+}
+
 /// Immutable configuration set at startup.
 pub struct AppConfig {
     pub repo: String,
@@ -188,13 +194,14 @@ pub struct AppState {
 
     // Run data
     pub runs: Vec<WorkflowRun>,
-    pub previous_snapshot: HashMap<u64, (RunStatus, Option<Conclusion>)>,
+    pub previous_snapshot: HashMap<u64, (RunStatus, Option<Conclusion>, u64)>,
+    pub poll_count: u64,
 
     // Tree navigation
     pub tree_items: Vec<TreeItem>,
     pub cursor: usize,
     pub expanded_runs: std::collections::HashSet<u64>,
-    pub expanded_jobs: std::collections::HashSet<(u64, usize)>,
+    pub expanded_jobs: std::collections::HashSet<(u64, u64)>,
     pub filter: FilterMode,
 
     // Polling
@@ -206,15 +213,14 @@ pub struct AppState {
     pub notifications: Vec<Notification>,
     pub error: Option<(String, std::time::Instant)>,
     pub spinner_frame: usize,
-    pub is_loading: bool,
+    pub loading_count: u16,
     pub should_quit: bool,
 
-    // Log overlay
+    // Log overlay cache
     pub log_cache: HashMap<(u64, Option<u64>), FailedLog>,
-    pub log_overlay: Option<LogOverlay>,
 
-    // Detail overlay
-    pub detail_overlay: Option<DetailOverlay>,
+    // Active overlay (mutually exclusive)
+    pub overlay: ActiveOverlay,
 
     // Per-run errors (e.g. job-fetch failures)
     pub run_errors: HashMap<u64, String>,
@@ -239,6 +245,7 @@ impl AppState {
             },
             runs: Vec::new(),
             previous_snapshot: HashMap::new(),
+            poll_count: 0,
             tree_items: Vec::new(),
             cursor: 0,
             expanded_runs: std::collections::HashSet::new(),
@@ -250,11 +257,10 @@ impl AppState {
             notifications: Vec::new(),
             error: None,
             spinner_frame: 0,
-            is_loading: false,
+            loading_count: 0,
             should_quit: false,
             log_cache: HashMap::new(),
-            log_overlay: None,
-            detail_overlay: None,
+            overlay: ActiveOverlay::None,
             run_errors: HashMap::new(),
             desktop_notify: true,
         }
@@ -277,8 +283,12 @@ impl AppState {
             });
             if run_expanded {
                 if run.jobs_fetched {
-                    for (job_idx, _job) in run.jobs.iter().enumerate() {
-                        let job_expanded = self.expanded_jobs.contains(&(run_id, job_idx));
+                    for (job_idx, job) in run.jobs.iter().enumerate() {
+                        let job_db_id = match job.database_id {
+                            Some(id) => id,
+                            None => continue,
+                        };
+                        let job_expanded = self.expanded_jobs.contains(&(run_id, job_db_id));
                         items.push(TreeItem {
                             level: TreeLevel::Job,
                             run_idx: *run_idx,
@@ -312,6 +322,8 @@ impl AppState {
         self.tree_items = items;
         if self.cursor >= self.tree_items.len() && !self.tree_items.is_empty() {
             self.cursor = self.tree_items.len() - 1;
+        } else if self.tree_items.is_empty() {
+            self.cursor = 0;
         }
     }
 
@@ -361,6 +373,10 @@ impl AppState {
         self.runs.get(run_idx).map(|r| r.database_id)
     }
 
+    fn job_db_id_for(&self, run_idx: usize, job_idx: usize) -> Option<u64> {
+        self.runs.get(run_idx)?.jobs.get(job_idx)?.database_id
+    }
+
     pub fn toggle_expand(&mut self) {
         if let Some(item) = self.tree_items.get(self.cursor).cloned() {
             let Some(run_id) = self.run_id_for(item.run_idx) else {
@@ -385,11 +401,13 @@ impl AppState {
                 }
                 TreeLevel::Job => {
                     if let Some(job_idx) = item.job_idx {
-                        let key = (run_id, job_idx);
-                        if self.expanded_jobs.contains(&key) {
-                            self.expanded_jobs.remove(&key);
-                        } else {
-                            self.expanded_jobs.insert(key);
+                        if let Some(job_db_id) = self.job_db_id_for(item.run_idx, job_idx) {
+                            let key = (run_id, job_db_id);
+                            if self.expanded_jobs.contains(&key) {
+                                self.expanded_jobs.remove(&key);
+                            } else {
+                                self.expanded_jobs.insert(key);
+                            }
                         }
                     }
                 }
@@ -415,10 +433,12 @@ impl AppState {
                 }
                 TreeLevel::Job => {
                     if let Some(job_idx) = item.job_idx {
-                        let key = (run_id, job_idx);
-                        if !self.expanded_jobs.contains(&key) {
-                            self.expanded_jobs.insert(key);
-                            self.rebuild_tree();
+                        if let Some(job_db_id) = self.job_db_id_for(item.run_idx, job_idx) {
+                            let key = (run_id, job_db_id);
+                            if !self.expanded_jobs.contains(&key) {
+                                self.expanded_jobs.insert(key);
+                                self.rebuild_tree();
+                            }
                         }
                     }
                 }
@@ -449,16 +469,18 @@ impl AppState {
                 }
                 TreeLevel::Job => {
                     if let Some(job_idx) = item.job_idx {
-                        let key = (run_id, job_idx);
-                        if self.expanded_jobs.contains(&key) {
-                            self.expanded_jobs.remove(&key);
-                            self.rebuild_tree();
-                        } else {
-                            // Go up to parent run
-                            for (i, ti) in self.tree_items.iter().enumerate() {
-                                if ti.level == TreeLevel::Run && ti.run_idx == item.run_idx {
-                                    self.cursor = i;
-                                    break;
+                        if let Some(job_db_id) = self.job_db_id_for(item.run_idx, job_idx) {
+                            let key = (run_id, job_db_id);
+                            if self.expanded_jobs.contains(&key) {
+                                self.expanded_jobs.remove(&key);
+                                self.rebuild_tree();
+                            } else {
+                                // Go up to parent run
+                                for (i, ti) in self.tree_items.iter().enumerate() {
+                                    if ti.level == TreeLevel::Run && ti.run_idx == item.run_idx {
+                                        self.cursor = i;
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -541,6 +563,10 @@ impl AppState {
             .retain(|n| now.duration_since(n.timestamp).as_secs() < NOTIFICATION_TTL_SECS);
     }
 
+    pub fn is_loading(&self) -> bool {
+        self.loading_count > 0
+    }
+
     pub fn advance_spinner(&mut self) {
         self.spinner_frame = (self.spinner_frame + 1) % SPINNER_FRAME_COUNT;
     }
@@ -568,7 +594,7 @@ impl AppState {
     // --- Log overlay methods ---
 
     pub fn has_log_overlay(&self) -> bool {
-        self.log_overlay.is_some()
+        matches!(self.overlay, ActiveOverlay::Log(_))
     }
 
     pub fn open_log_overlay(
@@ -587,7 +613,7 @@ impl AppState {
         } else {
             lines
         };
-        self.log_overlay = Some(LogOverlay {
+        self.overlay = ActiveOverlay::Log(LogOverlay {
             title,
             lines,
             scroll: 0,
@@ -597,30 +623,32 @@ impl AppState {
     }
 
     pub fn close_log_overlay(&mut self) {
-        self.log_overlay = None;
+        if matches!(self.overlay, ActiveOverlay::Log(_)) {
+            self.overlay = ActiveOverlay::None;
+        }
     }
 
     pub fn scroll_log_up(&mut self, amount: usize) {
-        if let Some(ref mut overlay) = self.log_overlay {
+        if let ActiveOverlay::Log(ref mut overlay) = self.overlay {
             overlay.scroll = overlay.scroll.saturating_sub(amount);
         }
     }
 
     pub fn scroll_log_down(&mut self, amount: usize, visible_height: usize) {
-        if let Some(ref mut overlay) = self.log_overlay {
+        if let ActiveOverlay::Log(ref mut overlay) = self.overlay {
             let max_scroll = overlay.lines.len().saturating_sub(visible_height);
             overlay.scroll = (overlay.scroll + amount).min(max_scroll);
         }
     }
 
     pub fn scroll_log_to_top(&mut self) {
-        if let Some(ref mut overlay) = self.log_overlay {
+        if let ActiveOverlay::Log(ref mut overlay) = self.overlay {
             overlay.scroll = 0;
         }
     }
 
     pub fn scroll_log_to_bottom(&mut self, visible_height: usize) {
-        if let Some(ref mut overlay) = self.log_overlay {
+        if let ActiveOverlay::Log(ref mut overlay) = self.overlay {
             overlay.scroll = overlay.lines.len().saturating_sub(visible_height);
         }
     }
@@ -628,15 +656,17 @@ impl AppState {
     // --- Detail overlay methods ---
 
     pub fn has_detail_overlay(&self) -> bool {
-        self.detail_overlay.is_some()
+        matches!(self.overlay, ActiveOverlay::Detail(_))
     }
 
     pub fn open_detail_overlay(&mut self, title: String, lines: Vec<(String, String)>) {
-        self.detail_overlay = Some(DetailOverlay { title, lines });
+        self.overlay = ActiveOverlay::Detail(DetailOverlay { title, lines });
     }
 
     pub fn close_detail_overlay(&mut self) {
-        self.detail_overlay = None;
+        if matches!(self.overlay, ActiveOverlay::Detail(_)) {
+            self.overlay = ActiveOverlay::None;
+        }
     }
 
     pub fn current_item_ids(&self) -> Option<(u64, Option<u64>)> {
@@ -667,8 +697,16 @@ impl AppState {
         }
     }
 
+    pub fn log_overlay_ref(&self) -> Option<&LogOverlay> {
+        if let ActiveOverlay::Log(ref overlay) = self.overlay {
+            Some(overlay)
+        } else {
+            None
+        }
+    }
+
     pub fn log_overlay_text(&self) -> Option<String> {
-        self.log_overlay.as_ref().map(|o| o.lines.join("\n"))
+        self.log_overlay_ref().map(|o| o.lines.join("\n"))
     }
 }
 
@@ -832,7 +870,7 @@ mod tests {
         run.jobs_fetched = true;
         let mut state = state_with_runs(vec![run]);
         state.expanded_runs.insert(1);
-        state.expanded_jobs.insert((1, 0));
+        state.expanded_jobs.insert((1, 1));
         state.rebuild_tree();
         // run + job + 2 steps
         assert_eq!(state.tree_items.len(), 4);
@@ -930,12 +968,12 @@ mod tests {
         run.jobs_fetched = true;
         let mut state = state_with_runs(vec![run]);
         state.expanded_runs.insert(1);
-        state.expanded_jobs.insert((1, 0));
+        state.expanded_jobs.insert((1, 1));
         state.rebuild_tree();
         state.cursor = 0; // on the run
         state.collapse_current();
         assert!(!state.expanded_runs.contains(&1));
-        assert!(!state.expanded_jobs.contains(&(1, 0)));
+        assert!(!state.expanded_jobs.contains(&(1, 1)));
     }
 
     // --- Filtering ---
@@ -1143,7 +1181,7 @@ mod tests {
         run.jobs_fetched = true;
         let mut state = state_with_runs(vec![run]);
         state.expanded_runs.insert(1);
-        state.expanded_jobs.insert((1, 0));
+        state.expanded_jobs.insert((1, 1));
         state.rebuild_tree();
         let item = &state.tree_items[2]; // first step
         assert!(matches!(
@@ -1291,6 +1329,13 @@ mod tests {
         assert_eq!(state.current_item_ids(), None);
     }
 
+    fn unwrap_log_overlay(state: &AppState) -> &LogOverlay {
+        match &state.overlay {
+            ActiveOverlay::Log(o) => o,
+            _ => panic!("Expected Log overlay"),
+        }
+    }
+
     #[test]
     fn open_close_log_overlay() {
         let mut state = state_with_runs(vec![]);
@@ -1298,7 +1343,7 @@ mod tests {
 
         state.open_log_overlay("Test".to_string(), "line1\nline2", 1, None);
         assert!(state.has_log_overlay());
-        assert_eq!(state.log_overlay.as_ref().unwrap().lines.len(), 2);
+        assert_eq!(unwrap_log_overlay(&state).lines.len(), 2);
         assert_eq!(state.log_overlay_text(), Some("line1\nline2".to_string()));
 
         state.close_log_overlay();
@@ -1314,12 +1359,9 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         state.open_log_overlay("Test".to_string(), &content, 1, None);
-        assert_eq!(
-            state.log_overlay.as_ref().unwrap().lines.len(),
-            LOG_MAX_LINES
-        );
+        assert_eq!(unwrap_log_overlay(&state).lines.len(), LOG_MAX_LINES);
         // Should keep last 500 lines (100..599)
-        assert!(state.log_overlay.as_ref().unwrap().lines[0].contains("100"));
+        assert!(unwrap_log_overlay(&state).lines[0].contains("100"));
     }
 
     #[test]
@@ -1333,26 +1375,26 @@ mod tests {
 
         // Scroll down
         state.scroll_log_down(5, 20);
-        assert_eq!(state.log_overlay.as_ref().unwrap().scroll, 5);
+        assert_eq!(unwrap_log_overlay(&state).scroll, 5);
 
         // Scroll up
         state.scroll_log_up(3);
-        assert_eq!(state.log_overlay.as_ref().unwrap().scroll, 2);
+        assert_eq!(unwrap_log_overlay(&state).scroll, 2);
 
         // Scroll up past top
         state.scroll_log_up(10);
-        assert_eq!(state.log_overlay.as_ref().unwrap().scroll, 0);
+        assert_eq!(unwrap_log_overlay(&state).scroll, 0);
 
         // Scroll down past max
         state.scroll_log_down(100, 20);
-        assert_eq!(state.log_overlay.as_ref().unwrap().scroll, 30); // 50 - 20
+        assert_eq!(unwrap_log_overlay(&state).scroll, 30); // 50 - 20
 
         // Jump to top
         state.scroll_log_to_top();
-        assert_eq!(state.log_overlay.as_ref().unwrap().scroll, 0);
+        assert_eq!(unwrap_log_overlay(&state).scroll, 0);
 
         // Jump to bottom
         state.scroll_log_to_bottom(20);
-        assert_eq!(state.log_overlay.as_ref().unwrap().scroll, 30);
+        assert_eq!(unwrap_log_overlay(&state).scroll, 30);
     }
 }

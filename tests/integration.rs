@@ -97,6 +97,7 @@ fn full_flow_with_jobs_expansion() {
 
     // Parse jobs (simulating a separate fetch)
     let jobs_json = r#"{"jobs":[{
+        "databaseId": 301,
         "name": "build",
         "status": "completed",
         "conclusion": "success",
@@ -118,7 +119,7 @@ fn full_flow_with_jobs_expansion() {
     // Build state and expand
     let mut state = make_state_with_runs(runs);
     state.expanded_runs.insert(200);
-    state.expanded_jobs.insert((200, 0));
+    state.expanded_jobs.insert((200, 301));
     state.rebuild_tree();
 
     // Verify tree depth: run + job + 3 steps = 5 items
@@ -250,7 +251,7 @@ fn log_overlay_lifecycle() {
 
     // Scroll
     state.scroll_log_down(1, 10);
-    assert_eq!(state.log_overlay.as_ref().unwrap().scroll, 0); // only 2 lines, can't scroll
+    assert_eq!(state.log_overlay_ref().unwrap().scroll, 0); // only 2 lines, can't scroll
 
     // Close
     state.close_log_overlay();

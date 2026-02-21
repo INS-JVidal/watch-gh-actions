@@ -20,7 +20,7 @@ pub fn render(f: &mut Frame, state: &AppState) {
     // Error overlay
     if let Some(err) = state.error_message() {
         let area = f.area();
-        if area.height > 6 {
+        if area.height > 6 && area.width >= 4 {
             use ratatui::layout::Rect;
             use ratatui::style::{Color, Style};
             use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
@@ -43,13 +43,14 @@ pub fn render(f: &mut Frame, state: &AppState) {
         }
     }
 
-    // Log overlay (drawn on top of everything)
-    if let Some(ref overlay) = state.log_overlay {
-        crate::tui::log_overlay::render(f, overlay);
-    }
-
-    // Detail overlay (drawn on top of everything)
-    if let Some(ref overlay) = state.detail_overlay {
-        crate::tui::detail_overlay::render(f, overlay);
+    // Overlay (drawn on top of everything)
+    match &state.overlay {
+        crate::app::ActiveOverlay::Log(overlay) => {
+            crate::tui::log_overlay::render(f, overlay);
+        }
+        crate::app::ActiveOverlay::Detail(overlay) => {
+            crate::tui::detail_overlay::render(f, overlay);
+        }
+        crate::app::ActiveOverlay::None => {}
     }
 }

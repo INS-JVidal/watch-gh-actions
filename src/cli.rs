@@ -14,7 +14,7 @@ pub struct Cli {
     pub branch: Option<String>,
 
     /// Poll interval in seconds
-    #[arg(short, long, default_value_t = 10)]
+    #[arg(short, long, default_value_t = 10, value_parser = clap::value_parser!(u64).range(1..))]
     pub interval: u64,
 
     /// Maximum number of runs to display

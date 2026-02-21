@@ -49,7 +49,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &AppState) {
     }
 
     // Loading spinner or poll countdown
-    if state.is_loading {
+    if state.is_loading() {
         spans.push(Span::raw(" "));
         spans.push(Span::styled(
             format!("{}", spinner::frame(state.spinner_frame)),

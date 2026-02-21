@@ -100,7 +100,6 @@ async fn main() -> Result<()> {
 
     let mut state = AppState::new(repo.clone(), branch, args.limit, args.workflow.clone());
     state.poll_interval = args.interval;
-    state.is_loading = false;
     state.desktop_notify = !args.no_notify;
     state.runs = startup_result.runs;
     state.rebuild_tree();
@@ -169,7 +168,7 @@ async fn run_app(
                     match input::map_key(
                         key,
                         state.error.is_some(),
-                        state.is_loading,
+                        state.is_loading(),
                         state.has_log_overlay(),
                         state.has_detail_overlay(),
                     ) {
@@ -194,7 +193,7 @@ async fn run_app(
                         Action::Collapse => state.collapse_current(),
                         Action::Toggle => state.toggle_expand(),
                         Action::Refresh => {
-                            state.is_loading = true;
+                            state.loading_count = state.loading_count.saturating_add(1);
                             let tx2 = tx.clone();
                             let repo2 = repo.to_string();
                             let limit = state.config.limit;
@@ -218,9 +217,16 @@ async fn run_app(
                         }
                         Action::RerunFailed => {
                             if let Some(run_id) = state.current_run_id() {
+                                let run_conclusion = state.runs.iter()
+                                    .find(|r| r.database_id == run_id)
+                                    .and_then(|r| r.conclusion);
                                 if state.current_run_status() != Some(app::RunStatus::Completed) {
                                     state.set_error(
                                         "Cannot rerun: workflow is still in progress".to_string(),
+                                    );
+                                } else if run_conclusion == Some(app::Conclusion::Success) {
+                                    state.set_error(
+                                        "Run completed successfully — nothing to rerun".to_string(),
                                     );
                                 } else {
                                     let repo2 = repo.to_string();
@@ -247,28 +253,44 @@ async fn run_app(
                             if !state.current_item_is_failed() {
                                 state.set_error("No failure logs for this item".to_string());
                             } else if let Some((run_id, job_id)) = state.current_item_ids() {
-                                let cache_key = (run_id, job_id);
-                                let cached = state.log_cache.get(&cache_key).and_then(|entry| {
-                                    if entry.fetched_at.elapsed().as_secs()
-                                        < app::LOG_CACHE_TTL_SECS
-                                    {
-                                        Some(entry.content.clone())
-                                    } else {
-                                        None
-                                    }
-                                });
-                                if let Some(content) = cached {
-                                    let title = build_log_title(state, run_id, job_id);
-                                    state.open_log_overlay(title, &content, run_id, job_id);
+                                // When on a Job/Step node, job_id must be available
+                                let is_job_or_step = state
+                                    .tree_items
+                                    .get(state.cursor)
+                                    .is_some_and(|item| {
+                                        matches!(
+                                            item.level,
+                                            app::TreeLevel::Job | app::TreeLevel::Step
+                                        )
+                                    });
+                                if is_job_or_step && job_id.is_none() {
+                                    state.set_error(
+                                        "Job ID unavailable, cannot fetch logs".to_string(),
+                                    );
                                 } else {
-                                    let title = build_log_title(state, run_id, job_id);
-                                    fetch_logs_async(repo, run_id, job_id, &title, tx);
+                                    let cache_key = (run_id, job_id);
+                                    let cached =
+                                        state.log_cache.get(&cache_key).and_then(|entry| {
+                                            if entry.fetched_at.elapsed().as_secs()
+                                                < app::LOG_CACHE_TTL_SECS
+                                            {
+                                                Some(entry.content.clone())
+                                            } else {
+                                                None
+                                            }
+                                        });
+                                    if let Some(content) = cached {
+                                        let title = build_log_title(state, run_id, job_id);
+                                        state.open_log_overlay(title, &content, run_id, job_id);
+                                    } else {
+                                        let title = build_log_title(state, run_id, job_id);
+                                        fetch_logs_async(repo, run_id, job_id, &title, tx);
+                                    }
                                 }
                             }
                         }
                         Action::CloseOverlay => {
-                            state.close_log_overlay();
-                            state.close_detail_overlay();
+                            state.overlay = app::ActiveOverlay::None;
                         }
                         Action::ScrollUp => state.scroll_log_up(1),
                         Action::ScrollDown => {
@@ -346,7 +368,7 @@ async fn run_app(
                     }
                 }
                 AppEvent::PollResult(new_runs) => {
-                    state.is_loading = false;
+                    state.loading_count = state.loading_count.saturating_sub(1);
                     state.clear_error();
                     state.run_errors.clear();
 
@@ -361,9 +383,12 @@ async fn run_app(
                     if let Some(old_snapshot) = old_snapshot {
                         for run in &new_runs {
                             if run.status == app::RunStatus::Completed {
-                                if let Some(&(old_status, _)) = old_snapshot.get(&run.database_id) {
+                                if let Some(&(old_status, _, _)) = old_snapshot.get(&run.database_id) {
                                     if old_status != app::RunStatus::Completed {
-                                        notify::send_desktop(run);
+                                        let run_clone = run.clone();
+                                        tokio::task::spawn_blocking(move || {
+                                            notify::send_desktop(&run_clone);
+                                        });
                                     }
                                 }
                             }
@@ -450,7 +475,7 @@ async fn run_app(
                     state.rebuild_tree();
                 }
                 AppEvent::Error(e) => {
-                    state.is_loading = false;
+                    state.loading_count = state.loading_count.saturating_sub(1);
                     state.set_error(e);
                 }
             }

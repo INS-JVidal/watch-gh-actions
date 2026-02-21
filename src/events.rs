@@ -47,14 +47,23 @@ impl EventHandler {
 
         let thread = std::thread::spawn(move || {
             while !shutdown_flag.load(Ordering::Relaxed) {
-                if event::poll(tick_rate).unwrap_or(false) {
-                    if let Ok(CrosstermEvent::Key(key)) = event::read() {
-                        if eventtx.send(AppEvent::Key(key)).is_err() {
+                match event::poll(tick_rate) {
+                    Err(e) => {
+                        let _ = eventtx.send(AppEvent::Error(format!("Terminal poll error: {e}")));
+                        break;
+                    }
+                    Ok(false) => {
+                        if eventtx.send(AppEvent::Tick).is_err() {
                             break;
                         }
+                        continue;
                     }
-                } else if eventtx.send(AppEvent::Tick).is_err() {
-                    break;
+                    Ok(true) => {}
+                }
+                if let Ok(CrosstermEvent::Key(key)) = event::read() {
+                    if eventtx.send(AppEvent::Key(key)).is_err() {
+                        break;
+                    }
                 }
             }
         });

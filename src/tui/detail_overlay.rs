@@ -34,7 +34,7 @@ pub fn render(f: &mut Frame, overlay: &DetailOverlay) {
     let label_width = overlay
         .lines
         .iter()
-        .map(|(l, _)| l.len())
+        .map(|(l, _)| UnicodeWidthStr::width(l.as_str()))
         .max()
         .unwrap_or(0);
 
@@ -42,7 +42,7 @@ pub fn render(f: &mut Frame, overlay: &DetailOverlay) {
         .lines
         .iter()
         .map(|(label, value)| {
-            let label_col_width = label_width + 2;
+            let label_col_width = label_width.saturating_add(2);
             let value_max = inner_width.saturating_sub(label_col_width);
             Line::from(vec![
                 Span::styled(
