@@ -3,9 +3,10 @@ name: CI
 on:
   push:
     branches: [master]
+  pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   test:
@@ -15,35 +16,37 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-
+
       - run: cargo fmt --check
       - run: cargo test
       - run: cargo clippy -- -D warnings
-      - run: cargo install cargo-deny --locked
+
+      - name: Cache cargo-deny binary
+        id: cache-cargo-deny
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: cargo-deny-0.19.0
+
+      - name: Install cargo-deny
+        if: steps.cache-cargo-deny.outputs.cache-hit != 'true'
+        run: |
+          curl -sSL https://github.com/EmbarkStudios/cargo-deny/releases/download/0.19.0/cargo-deny-0.19.0-x86_64-unknown-linux-musl.tar.gz \
+            | tar -xz --strip-components=1 -C ~/.cargo/bin cargo-deny-0.19.0-x86_64-unknown-linux-musl/cargo-deny
+
       - run: cargo deny check
 
-  bump-minor:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Bump minor version
-        run: |
-          current=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          major=$(echo "$current" | cut -d. -f1)
-          minor=$(echo "$current" | cut -d. -f2)
-          new_minor=$((minor + 1))
-          new_version="$major.$new_minor.0"
-          sed -i "s/^version = \"$current\"/version = \"$new_version\"/" Cargo.toml
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml
-          git commit -m "chore: bump minor to $new_version [skip ci]"
-          git push
-
   cleanup:
-    needs: bump-minor
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       actions: write
