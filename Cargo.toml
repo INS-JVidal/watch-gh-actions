@@ -3,6 +3,7 @@ name = "ghw"
 version = "0.6.9"
 edition = "2021"
 description = "GitHub Actions Watcher TUI"
+license = "MIT"
 
 [dependencies]
 ratatui = "0.30"
