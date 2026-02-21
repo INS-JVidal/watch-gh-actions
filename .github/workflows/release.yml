@@ -16,15 +16,16 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
             archive: tar.gz
-          - target: x86_64-apple-darwin
-            runner: macos-latest
-            archive: tar.gz
-          - target: aarch64-apple-darwin
-            runner: macos-latest
-            archive: tar.gz
-          - target: x86_64-pc-windows-msvc
-            runner: windows-latest
-            archive: zip
+          # Uncomment when cross-compilation toolchains are set up:
+          # - target: x86_64-apple-darwin
+          #   runner: macos-latest
+          #   archive: tar.gz
+          # - target: aarch64-apple-darwin
+          #   runner: macos-latest
+          #   archive: tar.gz
+          # - target: x86_64-pc-windows-msvc
+          #   runner: windows-latest
+          #   archive: zip
 
     runs-on: ${{ matrix.runner }}
     steps:
