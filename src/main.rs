@@ -202,10 +202,8 @@ async fn run_app(
                                 match gh::executor::fetch_runs(&repo2, limit, wf.as_deref()).await {
                                     Ok(json) => match gh::parser::parse_runs(&json) {
                                         Ok(runs) => {
-                                            let _ = tx2.send(AppEvent::PollResult {
-                                            runs,
-                                            manual: true,
-                                        });
+                                            let _ = tx2
+                                                .send(AppEvent::PollResult { runs, manual: true });
                                         }
                                         Err(e) => {
                                             let _ = tx2.send(AppEvent::Error(format!("{}", e)));
@@ -220,7 +218,9 @@ async fn run_app(
                         }
                         Action::RerunFailed => {
                             if let Some(run_id) = state.current_run_id() {
-                                let run_conclusion = state.runs.iter()
+                                let run_conclusion = state
+                                    .runs
+                                    .iter()
                                     .find(|r| r.database_id == run_id)
                                     .and_then(|r| r.conclusion);
                                 if state.current_run_status() != Some(app::RunStatus::Completed) {
@@ -257,10 +257,8 @@ async fn run_app(
                                 state.set_error("No failure logs for this item".to_string());
                             } else if let Some((run_id, job_id)) = state.current_item_ids() {
                                 // When on a Job/Step node, job_id must be available
-                                let is_job_or_step = state
-                                    .tree_items
-                                    .get(state.cursor)
-                                    .is_some_and(|item| {
+                                let is_job_or_step =
+                                    state.tree_items.get(state.cursor).is_some_and(|item| {
                                         matches!(
                                             item.level,
                                             app::TreeLevel::Job | app::TreeLevel::Step
@@ -393,7 +391,9 @@ async fn run_app(
                     if let Some(old_snapshot) = old_snapshot {
                         for run in &new_runs {
                             if run.status == app::RunStatus::Completed {
-                                if let Some(&(old_status, _, _)) = old_snapshot.get(&run.database_id) {
+                                if let Some(&(old_status, _, _)) =
+                                    old_snapshot.get(&run.database_id)
+                                {
                                     if old_status != app::RunStatus::Completed {
                                         let run_clone = run.clone();
                                         tokio::task::spawn_blocking(move || {

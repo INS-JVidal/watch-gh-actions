@@ -47,9 +47,9 @@ pub fn detect_changes(state: &mut AppState, new_runs: &[WorkflowRun]) {
     }
 
     // Evict entries not seen in the last SNAPSHOT_EVICTION_POLLS polls
-    state
-        .previous_snapshot
-        .retain(|_, (_, _, last_seen)| current_poll.saturating_sub(*last_seen) < SNAPSHOT_EVICTION_POLLS);
+    state.previous_snapshot.retain(|_, (_, _, last_seen)| {
+        current_poll.saturating_sub(*last_seen) < SNAPSHOT_EVICTION_POLLS
+    });
 }
 
 #[cfg(test)]

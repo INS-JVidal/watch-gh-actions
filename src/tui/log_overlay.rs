@@ -9,7 +9,9 @@ pub fn render(f: &mut Frame, overlay: &LogOverlay) {
     let area = f.area();
 
     // ~90% width, ~80% height, centered
-    let width = (area.width * 9 / 10).max(area.width.min(20)).min(area.width);
+    let width = (area.width * 9 / 10)
+        .max(area.width.min(20))
+        .min(area.width);
     let height = (area.height * 8 / 10).max(6).min(area.height);
     let x = area.x + (area.width.saturating_sub(width)) / 2;
     let y = area.y + (area.height.saturating_sub(height)) / 2;
