@@ -18,8 +18,7 @@ pub fn backoff_delay(base_interval: u64, failures: u32) -> u64 {
     let multiplier = 1u64.checked_shl(failures).unwrap_or(u64::MAX);
     base_interval
         .saturating_mul(multiplier)
-        .min(MAX_BACKOFF_SECS)
-        .max(1)
+        .clamp(1, MAX_BACKOFF_SECS)
 }
 
 impl Poller {
@@ -39,7 +38,7 @@ impl Poller {
         }
     }
 
-    pub async fn run(self) {
+    pub async fn run(mut self) {
         let mut failures: u32 = 0;
 
         // Initial fetch
@@ -56,7 +55,11 @@ impl Poller {
             } else {
                 base_interval
             };
-            time::sleep(time::Duration::from_secs(delay)).await;
+            // Wake early if the polling interval changes (e.g. idle → active)
+            tokio::select! {
+                () = time::sleep(time::Duration::from_secs(delay)) => {},
+                _ = self.interval_rx.changed() => {},
+            }
 
             if self.poll_once().await {
                 failures = 0;
@@ -75,7 +78,10 @@ impl Poller {
         match executor::fetch_runs(&self.repo, self.limit, self.workflow.as_deref()).await {
             Ok(json) => match parser::parse_runs(&json) {
                 Ok(runs) => {
-                    let _ = self.tx.send(AppEvent::PollResult(runs));
+                    let _ = self.tx.send(AppEvent::PollResult {
+                        runs,
+                        manual: false,
+                    });
                     true
                 }
                 Err(e) => {

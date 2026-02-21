@@ -283,10 +283,10 @@ impl AppState {
             });
             if run_expanded {
                 if run.jobs_fetched {
+                    let items_before = items.len();
                     for (job_idx, job) in run.jobs.iter().enumerate() {
-                        let job_db_id = match job.database_id {
-                            Some(id) => id,
-                            None => continue,
+                        let Some(job_db_id) = job.database_id else {
+                            continue;
                         };
                         let job_expanded = self.expanded_jobs.contains(&(run_id, job_db_id));
                         items.push(TreeItem {
@@ -307,6 +307,17 @@ impl AppState {
                                 });
                             }
                         }
+                    }
+                    // If all jobs were skipped (e.g. all have database_id: None),
+                    // show a Loading placeholder so the expanded run isn't empty
+                    if items.len() == items_before && !run.jobs.is_empty() {
+                        items.push(TreeItem {
+                            level: TreeLevel::Loading,
+                            run_idx: *run_idx,
+                            job_idx: None,
+                            step_idx: None,
+                            expanded: false,
+                        });
                     }
                 } else {
                     items.push(TreeItem {

@@ -49,7 +49,7 @@ pub fn detect_changes(state: &mut AppState, new_runs: &[WorkflowRun]) {
     // Evict entries not seen in the last SNAPSHOT_EVICTION_POLLS polls
     state
         .previous_snapshot
-        .retain(|_, (_, _, last_seen)| current_poll.saturating_sub(*last_seen) <= SNAPSHOT_EVICTION_POLLS);
+        .retain(|_, (_, _, last_seen)| current_poll.saturating_sub(*last_seen) < SNAPSHOT_EVICTION_POLLS);
 }
 
 #[cfg(test)]
@@ -225,12 +225,12 @@ mod tests {
         let runs1 = vec![make_run(1, RunStatus::InProgress, None)];
         detect_changes(&mut state, &runs1);
 
-        // Poll 11 more times without run 1
-        for i in 2..=12 {
+        // Poll 10 more times without run 1 (eviction at exactly 10 polls absent)
+        for i in 2..=11 {
             let runs = vec![make_run(i, RunStatus::Queued, None)];
             detect_changes(&mut state, &runs);
         }
-        // Run 1 should be evicted after 10+ polls without seeing it
+        // Run 1 should be evicted after 10 polls without seeing it
         assert!(!state.previous_snapshot.contains_key(&1));
     }
 

@@ -202,7 +202,10 @@ async fn run_app(
                                 match gh::executor::fetch_runs(&repo2, limit, wf.as_deref()).await {
                                     Ok(json) => match gh::parser::parse_runs(&json) {
                                         Ok(runs) => {
-                                            let _ = tx2.send(AppEvent::PollResult(runs));
+                                            let _ = tx2.send(AppEvent::PollResult {
+                                            runs,
+                                            manual: true,
+                                        });
                                         }
                                         Err(e) => {
                                             let _ = tx2.send(AppEvent::Error(format!("{}", e)));
@@ -263,6 +266,8 @@ async fn run_app(
                                             app::TreeLevel::Job | app::TreeLevel::Step
                                         )
                                     });
+                                // Defense-in-depth: rebuild_tree filters None database_id jobs,
+                                // so this is currently unreachable but guards against future changes.
                                 if is_job_or_step && job_id.is_none() {
                                     state.set_error(
                                         "Job ID unavailable, cannot fetch logs".to_string(),
@@ -367,8 +372,13 @@ async fn run_app(
                         let _ = interval_tx.send(new_interval);
                     }
                 }
-                AppEvent::PollResult(new_runs) => {
-                    state.loading_count = state.loading_count.saturating_sub(1);
+                AppEvent::PollResult {
+                    runs: new_runs,
+                    manual,
+                } => {
+                    if manual {
+                        state.loading_count = state.loading_count.saturating_sub(1);
+                    }
                     state.clear_error();
                     state.run_errors.clear();
 
@@ -417,6 +427,21 @@ async fn run_app(
                     state.rebuild_tree();
                     state.last_poll = Some(Instant::now());
                     poll_start = Instant::now();
+
+                    // Close log overlay if its run no longer exists
+                    if let Some(overlay) = state.log_overlay_ref() {
+                        let overlay_run_id = overlay.run_id;
+                        if !state.runs.iter().any(|r| r.database_id == overlay_run_id) {
+                            state.overlay = app::ActiveOverlay::None;
+                        }
+                    }
+
+                    // Prune expanded_jobs for runs no longer present
+                    let run_ids: std::collections::HashSet<u64> =
+                        state.runs.iter().map(|r| r.database_id).collect();
+                    state
+                        .expanded_jobs
+                        .retain(|(run_id, _)| run_ids.contains(run_id));
 
                     // Re-fetch jobs for expanded runs whose data has changed
                     for run_id in refetch_run_ids {

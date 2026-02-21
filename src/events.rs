@@ -11,7 +11,10 @@ use tokio::sync::mpsc;
 pub enum AppEvent {
     Key(KeyEvent),
     Tick,
-    PollResult(Vec<WorkflowRun>),
+    PollResult {
+        runs: Vec<WorkflowRun>,
+        manual: bool,
+    },
     JobsResult {
         run_id: u64,
         jobs: Vec<Job>,
