@@ -152,7 +152,7 @@ pub async fn cancel_run(repo: &str, run_id: u64) -> Result<()> {
 
 pub async fn delete_run(repo: &str, run_id: u64) -> Result<()> {
     let run_id_str = run_id.to_string();
-    run_gh(&["run", "delete", "--repo", repo, &run_id_str, "--yes"]).await?;
+    run_gh(&["run", "delete", "--repo", repo, &run_id_str]).await?;
     Ok(())
 }
 
