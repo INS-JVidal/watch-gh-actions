@@ -42,10 +42,10 @@ impl Poller {
         let mut failures: u32 = 0;
 
         // Initial fetch
-        if self.poll_once().await {
-            failures = 0;
-        } else {
-            failures = failures.saturating_add(1);
+        match self.poll_once().await {
+            PollOutcome::Success => failures = 0,
+            PollOutcome::Failure => failures = failures.saturating_add(1),
+            PollOutcome::ChannelClosed => return,
         }
 
         loop {
@@ -61,40 +61,72 @@ impl Poller {
                 _ = self.interval_rx.changed() => {},
             }
 
-            if self.poll_once().await {
-                failures = 0;
-            } else {
-                failures = failures.saturating_add(1);
-                let next_delay = backoff_delay(base_interval, failures);
-                let _ = self.tx.send(AppEvent::Error(format!(
-                    "Poll failed, retrying in {next_delay}s"
-                )));
+            match self.poll_once().await {
+                PollOutcome::Success => failures = 0,
+                PollOutcome::Failure => {
+                    failures = failures.saturating_add(1);
+                    let next_delay = backoff_delay(base_interval, failures);
+                    if self
+                        .tx
+                        .send(AppEvent::Error(format!(
+                            "Poll failed, retrying in {next_delay}s"
+                        )))
+                        .is_err()
+                    {
+                        return; // Receiver dropped
+                    }
+                }
+                PollOutcome::ChannelClosed => return,
             }
         }
     }
 
-    /// Returns `true` on success, `false` on failure.
-    async fn poll_once(&self) -> bool {
+    /// Returns the outcome of a single poll attempt.
+    async fn poll_once(&self) -> PollOutcome {
         match executor::fetch_runs(&self.repo, self.limit, self.workflow.as_deref()).await {
             Ok(json) => match parser::parse_runs(&json) {
                 Ok(runs) => {
-                    let _ = self.tx.send(AppEvent::PollResult {
-                        runs,
-                        manual: false,
-                    });
-                    true
+                    if self
+                        .tx
+                        .send(AppEvent::PollResult {
+                            runs,
+                            manual: false,
+                        })
+                        .is_err()
+                    {
+                        return PollOutcome::ChannelClosed;
+                    }
+                    PollOutcome::Success
                 }
                 Err(e) => {
-                    let _ = self.tx.send(AppEvent::Error(format!("Parse error: {e}")));
-                    false
+                    if self
+                        .tx
+                        .send(AppEvent::Error(format!("Parse error: {e}")))
+                        .is_err()
+                    {
+                        return PollOutcome::ChannelClosed;
+                    }
+                    PollOutcome::Failure
                 }
             },
             Err(e) => {
-                let _ = self.tx.send(AppEvent::Error(format!("{e}")));
-                false
+                if self
+                    .tx
+                    .send(AppEvent::Error(format!("{e}")))
+                    .is_err()
+                {
+                    return PollOutcome::ChannelClosed;
+                }
+                PollOutcome::Failure
             }
         }
     }
+}
+
+enum PollOutcome {
+    Success,
+    Failure,
+    ChannelClosed,
 }
 
 pub async fn fetch_jobs_for_run(repo: &str, run_id: u64, tx: &mpsc::UnboundedSender<AppEvent>) {
@@ -125,10 +157,10 @@ pub async fn fetch_jobs_for_run(repo: &str, run_id: u64, tx: &mpsc::UnboundedSen
                         });
                     }
                 },
-                Err(_) => {
+                Err(retry_err) => {
                     let _ = tx.send(AppEvent::RunError {
                         run_id,
-                        error: format!("{first_err}"),
+                        error: format!("{first_err} (retry also failed: {retry_err})"),
                     });
                 }
             }

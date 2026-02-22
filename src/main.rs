@@ -15,7 +15,7 @@ use crossterm::execute;
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen, SetTitle};
 use events::{AppEvent, EventHandler};
 use gh::poller::{self, Poller};
-use input::Action;
+use input::{Action, InputContext, OverlayMode};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io;
@@ -138,6 +138,15 @@ async fn main() -> Result<()> {
     result
 }
 
+/// Visible height of the log overlay area (80% of terminal height minus borders).
+fn log_overlay_height(terminal: &Terminal<CrosstermBackend<io::Stdout>>) -> usize {
+    terminal
+        .size()
+        .map(|s| s.height as usize * 8 / 10)
+        .unwrap_or(20)
+        .saturating_sub(2)
+}
+
 async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut AppState,
@@ -165,13 +174,18 @@ async fn run_app(
         if let Some(event) = events.next().await {
             match event {
                 AppEvent::Key(key) => {
-                    match input::map_key(
-                        key,
-                        state.error.is_some(),
-                        state.is_loading(),
-                        state.has_log_overlay(),
-                        state.has_detail_overlay(),
-                    ) {
+                    let ctx = InputContext {
+                        has_error: state.error.is_some(),
+                        is_loading: state.is_loading(),
+                        overlay: if state.has_log_overlay() {
+                            OverlayMode::Log
+                        } else if state.has_detail_overlay() {
+                            OverlayMode::Detail
+                        } else {
+                            OverlayMode::None
+                        },
+                    };
+                    match input::map_key(key, &ctx) {
                         Action::Quit => state.should_quit = true,
                         Action::DismissError => state.clear_error(),
                         Action::MoveUp => state.move_cursor_up(),
@@ -193,7 +207,7 @@ async fn run_app(
                         Action::Collapse => state.collapse_current(),
                         Action::Toggle => state.toggle_expand(),
                         Action::Refresh => {
-                            state.loading_count = state.loading_count.saturating_add(1);
+                            state.begin_loading();
                             let tx2 = tx.clone();
                             let repo2 = repo.to_string();
                             let limit = state.config.limit;
@@ -249,7 +263,9 @@ async fn run_app(
                         }
                         Action::OpenBrowser => {
                             if let Some(url) = state.current_run_url() {
-                                let _ = gh::executor::open_in_browser(url);
+                                if let Err(e) = gh::executor::open_in_browser(url) {
+                                    state.set_error(format!("{e}"));
+                                }
                             }
                         }
                         Action::ViewLogs => {
@@ -293,34 +309,19 @@ async fn run_app(
                             }
                         }
                         Action::CloseOverlay => {
-                            state.overlay = app::ActiveOverlay::None;
+                            state.close_overlay();
                         }
                         Action::ScrollUp => state.scroll_log_up(1),
                         Action::ScrollDown => {
-                            let h = terminal
-                                .size()
-                                .map(|s| s.height as usize * 8 / 10)
-                                .unwrap_or(20)
-                                .saturating_sub(2);
-                            state.scroll_log_down(1, h);
+                            state.scroll_log_down(1, log_overlay_height(terminal));
                         }
                         Action::PageUp => state.scroll_log_up(20),
                         Action::PageDown => {
-                            let h = terminal
-                                .size()
-                                .map(|s| s.height as usize * 8 / 10)
-                                .unwrap_or(20)
-                                .saturating_sub(2);
-                            state.scroll_log_down(20, h);
+                            state.scroll_log_down(20, log_overlay_height(terminal));
                         }
                         Action::ScrollToTop => state.scroll_log_to_top(),
                         Action::ScrollToBottom => {
-                            let h = terminal
-                                .size()
-                                .map(|s| s.height as usize * 8 / 10)
-                                .unwrap_or(20)
-                                .saturating_sub(2);
-                            state.scroll_log_to_bottom(h);
+                            state.scroll_log_to_bottom(log_overlay_height(terminal));
                         }
                         Action::CopyToClipboard => {
                             if let Some(text) = state.log_overlay_text() {
@@ -375,7 +376,7 @@ async fn run_app(
                     manual,
                 } => {
                     if manual {
-                        state.loading_count = state.loading_count.saturating_sub(1);
+                        state.end_loading();
                     }
                     state.clear_error();
                     state.run_errors.clear();
@@ -432,7 +433,7 @@ async fn run_app(
                     if let Some(overlay) = state.log_overlay_ref() {
                         let overlay_run_id = overlay.run_id;
                         if !state.runs.iter().any(|r| r.database_id == overlay_run_id) {
-                            state.overlay = app::ActiveOverlay::None;
+                            state.close_overlay();
                         }
                     }
 
@@ -478,29 +479,21 @@ async fn run_app(
                 }
                 AppEvent::ClipboardResult(ok) => {
                     if ok {
-                        state.notifications.push(app::Notification {
-                            run_id: 0,
-                            message: "Copied to clipboard".to_string(),
-                            timestamp: Instant::now(),
-                        });
+                        state.add_notification(0, "Copied to clipboard".to_string());
                     } else {
                         state.set_error("Failed to copy to clipboard".to_string());
                     }
                 }
                 AppEvent::RerunSuccess(run_id) => {
                     state.log_cache.retain(|(r, _), _| *r != run_id);
-                    state.notifications.push(app::Notification {
-                        run_id,
-                        message: "Rerun triggered".to_string(),
-                        timestamp: Instant::now(),
-                    });
+                    state.add_notification(run_id, "Rerun triggered".to_string());
                 }
                 AppEvent::RunError { run_id, error } => {
                     state.run_errors.insert(run_id, error);
                     state.rebuild_tree();
                 }
                 AppEvent::Error(e) => {
-                    state.loading_count = state.loading_count.saturating_sub(1);
+                    state.end_loading();
                     state.set_error(e);
                 }
             }
@@ -513,35 +506,16 @@ async fn run_app(
 }
 
 fn build_log_title(state: &AppState, run_id: u64, job_id: Option<u64>) -> String {
-    let run_name = state
-        .runs
-        .iter()
-        .find(|r| r.database_id == run_id)
-        .map(|r| r.display_title.as_str())
-        .unwrap_or("Unknown");
+    let run = state.runs.iter().find(|r| r.database_id == run_id);
+    let run_name = run.map_or("Unknown", |r| r.display_title.as_str());
 
     if let Some(jid) = job_id {
-        let job_name = state
-            .runs
-            .iter()
-            .find(|r| r.database_id == run_id)
+        let job_name = run
             .and_then(|r| r.jobs.iter().find(|j| j.database_id == Some(jid)))
-            .map(|j| j.name.as_str())
-            .unwrap_or("Unknown job");
-        format!("{} > {}", run_name, job_name)
+            .map_or("Unknown job", |j| j.name.as_str());
+        format!("{run_name} > {job_name}")
     } else {
         run_name.to_string()
-    }
-}
-
-fn format_duration_detail(secs: i64) -> String {
-    let secs = secs.max(0);
-    if secs < 60 {
-        format!("{secs}s")
-    } else if secs < 3600 {
-        format!("{}m {}s", secs / 60, secs % 60)
-    } else {
-        format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
     }
 }
 
@@ -554,10 +528,7 @@ fn build_detail_lines(
         app::ResolvedItem::Run(run) => {
             let title = format!("Run #{}", run.number);
             let conclusion_str = run.conclusion.map_or("-".into(), |c| format!("{c:?}"));
-            let duration = {
-                let elapsed = chrono::Utc::now().signed_duration_since(run.created_at);
-                format_duration_detail(elapsed.num_seconds())
-            };
+            let duration = app::compute_duration(Some(run.created_at), None);
             let lines = vec![
                 ("Title".into(), run.display_title.clone()),
                 ("Workflow".into(), run.name.clone()),
@@ -598,15 +569,14 @@ fn build_detail_lines(
                     completed.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
                 ));
             }
-            if let (Some(s), Some(e)) = (job.started_at, job.completed_at) {
-                let d = e.signed_duration_since(s).num_seconds();
-                lines.push(("Duration".into(), format_duration_detail(d)));
-            } else if let Some(s) = job.started_at {
-                let d = chrono::Utc::now().signed_duration_since(s).num_seconds();
-                lines.push((
-                    "Duration".into(),
-                    format!("{} (running)", format_duration_detail(d)),
-                ));
+            let dur = app::compute_duration(job.started_at, job.completed_at);
+            if !dur.is_empty() {
+                let label = if job.completed_at.is_none() {
+                    format!("{dur} (running)")
+                } else {
+                    dur
+                };
+                lines.push(("Duration".into(), label));
             }
             lines.push(("URL".into(), job.url.clone()));
             // Show parent run info
@@ -639,15 +609,14 @@ fn build_detail_lines(
                     completed.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
                 ));
             }
-            if let (Some(s), Some(e)) = (step.started_at, step.completed_at) {
-                let d = e.signed_duration_since(s).num_seconds();
-                lines.push(("Duration".into(), format_duration_detail(d)));
-            } else if let Some(s) = step.started_at {
-                let d = chrono::Utc::now().signed_duration_since(s).num_seconds();
-                lines.push((
-                    "Duration".into(),
-                    format!("{} (running)", format_duration_detail(d)),
-                ));
+            let dur = app::compute_duration(step.started_at, step.completed_at);
+            if !dur.is_empty() {
+                let label = if step.completed_at.is_none() {
+                    format!("{dur} (running)")
+                } else {
+                    dur
+                };
+                lines.push(("Duration".into(), label));
             }
             (title, lines)
         }

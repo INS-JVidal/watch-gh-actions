@@ -204,7 +204,9 @@ pub async fn copy_to_clipboard(text: &str) -> Result<()> {
 
         if let Ok(mut child) = child {
             if let Some(mut stdin) = child.stdin.take() {
-                let _ = stdin.write_all(text.as_bytes()).await;
+                stdin.write_all(text.as_bytes()).await.map_err(|e| {
+                    eyre!("Failed to write to clipboard: {e}")
+                })?;
                 drop(stdin);
             }
             let status = tokio::time::timeout(CLIPBOARD_TIMEOUT, child.wait())

@@ -1,6 +1,58 @@
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
+// ── Shared utility functions ──
+
+/// Format a duration in seconds into a human-readable string (e.g. "2m 5s").
+pub fn format_duration(secs: i64) -> String {
+    let secs = secs.max(0);
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else {
+        format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
+    }
+}
+
+/// Compute a human-readable duration from optional start/end timestamps.
+/// Returns an empty string if no start time is available.
+pub fn compute_duration(
+    started_at: Option<DateTime<Utc>>,
+    completed_at: Option<DateTime<Utc>>,
+) -> String {
+    match (started_at, completed_at) {
+        (Some(start), Some(end)) => format_duration(end.signed_duration_since(start).num_seconds()),
+        (Some(start), None) => format_duration(Utc::now().signed_duration_since(start).num_seconds()),
+        _ => String::new(),
+    }
+}
+
+/// Unicode-width-aware truncation with ellipsis.
+/// Returns `""` when `max_width` is 0.
+pub fn truncate(s: &str, max_width: usize) -> String {
+    use unicode_width::UnicodeWidthStr;
+    if max_width == 0 {
+        return String::new();
+    }
+    if UnicodeWidthStr::width(s) <= max_width {
+        s.to_string()
+    } else {
+        let mut result = String::new();
+        let mut width = 0;
+        for c in s.chars() {
+            let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+            if width + cw + 1 > max_width {
+                result.push('\u{2026}');
+                break;
+            }
+            result.push(c);
+            width += cw;
+        }
+        result
+    }
+}
+
 // Polling intervals (seconds)
 pub const POLL_INTERVAL_ACTIVE: u64 = 3;
 pub const POLL_INTERVAL_RECENT: u64 = 10;
@@ -388,6 +440,20 @@ impl AppState {
         self.runs.get(run_idx)?.jobs.get(job_idx)?.database_id
     }
 
+    /// Remove a run and all its child jobs from the expanded sets.
+    fn collapse_run_from_expanded(&mut self, run_id: u64) {
+        self.expanded_runs.remove(&run_id);
+        let keys: Vec<_> = self
+            .expanded_jobs
+            .iter()
+            .filter(|(r, _)| *r == run_id)
+            .copied()
+            .collect();
+        for k in keys {
+            self.expanded_jobs.remove(&k);
+        }
+    }
+
     pub fn toggle_expand(&mut self) {
         if let Some(item) = self.tree_items.get(self.cursor).cloned() {
             let Some(run_id) = self.run_id_for(item.run_idx) else {
@@ -396,16 +462,7 @@ impl AppState {
             match item.level {
                 TreeLevel::Run => {
                     if self.expanded_runs.contains(&run_id) {
-                        self.expanded_runs.remove(&run_id);
-                        let keys: Vec<_> = self
-                            .expanded_jobs
-                            .iter()
-                            .filter(|(r, _)| *r == run_id)
-                            .copied()
-                            .collect();
-                        for k in keys {
-                            self.expanded_jobs.remove(&k);
-                        }
+                        self.collapse_run_from_expanded(run_id);
                     } else {
                         self.expanded_runs.insert(run_id);
                     }
@@ -466,16 +523,7 @@ impl AppState {
             };
             match item.level {
                 TreeLevel::Run => {
-                    self.expanded_runs.remove(&run_id);
-                    let keys: Vec<_> = self
-                        .expanded_jobs
-                        .iter()
-                        .filter(|(r, _)| *r == run_id)
-                        .copied()
-                        .collect();
-                    for k in keys {
-                        self.expanded_jobs.remove(&k);
-                    }
+                    self.collapse_run_from_expanded(run_id);
                     self.rebuild_tree();
                 }
                 TreeLevel::Job => {
@@ -576,6 +624,36 @@ impl AppState {
 
     pub fn is_loading(&self) -> bool {
         self.loading_count > 0
+    }
+
+    pub fn begin_loading(&mut self) {
+        self.loading_count = self.loading_count.saturating_add(1);
+    }
+
+    pub fn end_loading(&mut self) {
+        self.loading_count = self.loading_count.saturating_sub(1);
+    }
+
+    pub fn close_overlay(&mut self) {
+        self.overlay = ActiveOverlay::None;
+    }
+
+    pub fn add_notification(&mut self, run_id: u64, message: String) {
+        self.notifications.push(Notification {
+            run_id,
+            message,
+            timestamp: std::time::Instant::now(),
+        });
+    }
+
+    pub fn prune_log_cache(&mut self) {
+        self.log_cache
+            .retain(|_, entry| entry.fetched_at.elapsed().as_secs() < LOG_CACHE_TTL_SECS);
+    }
+
+    pub fn update_runs(&mut self, new_runs: Vec<WorkflowRun>) {
+        self.runs = new_runs;
+        self.rebuild_tree();
     }
 
     pub fn advance_spinner(&mut self) {

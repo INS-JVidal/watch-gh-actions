@@ -63,10 +63,21 @@ impl EventHandler {
                     }
                     Ok(true) => {}
                 }
-                if let Ok(CrosstermEvent::Key(key)) = event::read() {
-                    if eventtx.send(AppEvent::Key(key)).is_err() {
+                match event::read() {
+                    Ok(CrosstermEvent::Key(key)) => {
+                        if eventtx.send(AppEvent::Key(key)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                        // EINTR — retry silently
+                    }
+                    Err(e) => {
+                        let _ = eventtx
+                            .send(AppEvent::Error(format!("Terminal read error: {e}")));
                         break;
                     }
+                    _ => {} // Non-key events (mouse, resize, etc.)
                 }
             }
         });

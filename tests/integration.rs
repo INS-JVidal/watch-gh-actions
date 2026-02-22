@@ -4,7 +4,7 @@ use fixtures::*;
 use ghw::app::{AppState, Conclusion, FilterMode, ResolvedItem, RunStatus, TreeLevel};
 use ghw::diff;
 use ghw::gh::parser;
-use ghw::input::{self, Action};
+use ghw::input::{self, Action, InputContext, OverlayMode};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
@@ -184,20 +184,22 @@ fn change_detection_across_poll_cycles() {
 fn input_to_state_action_flow() {
     let mut state = make_state_with_runs(vec![run_with_id(1), run_with_id(2), run_with_id(3)]);
 
+    let ctx = InputContext::default();
+
     // Map key 'j' -> MoveDown
-    let action = input::map_key(press(KeyCode::Char('j')), false, false, false, false);
+    let action = input::map_key(press(KeyCode::Char('j')), &ctx);
     assert_eq!(action, Action::MoveDown);
     state.move_cursor_down();
     assert_eq!(state.cursor, 1);
 
     // Map key 'k' -> MoveUp
-    let action = input::map_key(press(KeyCode::Char('k')), false, false, false, false);
+    let action = input::map_key(press(KeyCode::Char('k')), &ctx);
     assert_eq!(action, Action::MoveUp);
     state.move_cursor_up();
     assert_eq!(state.cursor, 0);
 
     // Map key 'f' -> CycleFilter
-    let action = input::map_key(press(KeyCode::Char('f')), false, false, false, false);
+    let action = input::map_key(press(KeyCode::Char('f')), &ctx);
     assert_eq!(action, Action::CycleFilter);
     state.cycle_filter();
     assert_eq!(state.filter, FilterMode::ActiveOnly);
@@ -265,12 +267,13 @@ fn log_overlay_lifecycle() {
     assert_eq!(state.current_item_ids(), Some((1, Some(10))));
 
     // ViewLogs action maps from 'e' key
-    let action = input::map_key(press(KeyCode::Char('e')), false, false, false, false);
+    let action = input::map_key(press(KeyCode::Char('e')), &InputContext::default());
     assert_eq!(action, Action::ViewLogs);
 
     // Overlay mode: 'e' closes
     state.open_log_overlay("test".to_string(), "log", 1, Some(10));
-    let action = input::map_key(press(KeyCode::Char('e')), false, false, true, false);
+    let log_ctx = InputContext { overlay: OverlayMode::Log, ..Default::default() };
+    let action = input::map_key(press(KeyCode::Char('e')), &log_ctx);
     assert_eq!(action, Action::CloseOverlay);
 }
 

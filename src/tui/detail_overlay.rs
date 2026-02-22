@@ -1,4 +1,4 @@
-use crate::app::DetailOverlay;
+use crate::app::{self, DetailOverlay};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -52,7 +52,7 @@ pub fn render(f: &mut Frame, overlay: &DetailOverlay) {
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    truncate_value(value, value_max),
+                    app::truncate(value, value_max),
                     Style::default().fg(Color::White),
                 ),
             ])
@@ -63,24 +63,3 @@ pub fn render(f: &mut Frame, overlay: &DetailOverlay) {
     f.render_widget(paragraph, overlay_area);
 }
 
-fn truncate_value(s: &str, max: usize) -> String {
-    let w = UnicodeWidthStr::width(s);
-    if w <= max {
-        s.to_string()
-    } else if max == 0 {
-        String::new()
-    } else {
-        let mut result = String::new();
-        let mut width = 0;
-        for c in s.chars() {
-            let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
-            if width + cw + 1 > max {
-                result.push('…');
-                break;
-            }
-            result.push(c);
-            width += cw;
-        }
-        result
-    }
-}

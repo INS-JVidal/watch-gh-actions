@@ -1,5 +1,4 @@
-use crate::app::{AppState, Conclusion, ResolvedItem, RunStatus, TreeLevel};
-use chrono::Utc;
+use crate::app::{self, AppState, Conclusion, ResolvedItem, RunStatus, TreeLevel};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -99,9 +98,10 @@ pub fn render(f: &mut Frame, area: Rect, state: &AppState) {
 fn status_icon(status: RunStatus, conclusion: Option<Conclusion>) -> (&'static str, Color) {
     match (status, conclusion) {
         (RunStatus::Completed, Some(Conclusion::Success)) => ("✓", Color::Green),
-        (RunStatus::Completed, Some(Conclusion::Failure | Conclusion::TimedOut)) => {
+        (RunStatus::Completed, Some(Conclusion::Failure | Conclusion::TimedOut | Conclusion::StartupFailure)) => {
             ("✗", Color::Red)
         }
+        (RunStatus::Completed, Some(Conclusion::ActionRequired)) => ("!", Color::Yellow),
         (RunStatus::Completed, Some(Conclusion::Cancelled)) => ("⊘", Color::Yellow),
         (RunStatus::Completed, Some(Conclusion::Skipped)) => ("⊘", Color::DarkGray),
         (RunStatus::InProgress, _) => ("⟳", Color::Yellow),
@@ -109,34 +109,21 @@ fn status_icon(status: RunStatus, conclusion: Option<Conclusion>) -> (&'static s
     }
 }
 
-fn format_duration(secs: i64) -> String {
-    let secs = secs.max(0);
-    if secs < 60 {
-        format!("{secs}s")
-    } else if secs < 3600 {
-        format!("{}m {}s", secs / 60, secs % 60)
+fn select_style(is_selected: bool) -> Style {
+    if is_selected {
+        Style::default().add_modifier(Modifier::REVERSED)
     } else {
-        format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
+        Style::default()
     }
 }
 
+#[cfg(test)]
+fn format_duration(secs: i64) -> String {
+    app::format_duration(secs)
+}
+
 fn truncate(s: &str, max_width: usize) -> String {
-    if UnicodeWidthStr::width(s) <= max_width {
-        s.to_string()
-    } else {
-        let mut result = String::new();
-        let mut width = 0;
-        for c in s.chars() {
-            let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
-            if width + cw + 1 > max_width {
-                result.push('…');
-                break;
-            }
-            result.push(c);
-            width += cw;
-        }
-        result
-    }
+    app::truncate(s, max_width)
 }
 
 fn render_run_line(
@@ -153,10 +140,7 @@ fn render_run_line(
     let arrow = if expanded { "▼" } else { "▶" };
 
     let number = format!("#{}", run.number);
-    let duration = {
-        let elapsed = Utc::now().signed_duration_since(run.created_at);
-        format_duration(elapsed.num_seconds())
-    };
+    let duration = app::compute_duration(Some(run.created_at), None);
 
     let icon_display_width = UnicodeWidthStr::width(icon);
     let arrow_display_width = UnicodeWidthStr::width(arrow);
@@ -166,11 +150,7 @@ fn render_run_line(
     let title_max = max_width.saturating_sub(prefix_width + suffix_width + error_width + 2);
     let title = truncate(&run.display_title, title_max);
 
-    let select_style = if is_selected {
-        Style::default().add_modifier(Modifier::REVERSED)
-    } else {
-        Style::default()
-    };
+    let sel_style = select_style(is_selected);
 
     let notif_marker = if has_notification { "★ " } else { "" };
     let idx_label = if visual_idx < crate::app::QUICK_SELECT_MAX {
@@ -186,7 +166,7 @@ fn render_run_line(
         ),
         Span::styled(format!("{number} "), Style::default().fg(Color::DarkGray)),
         Span::styled(notif_marker.to_string(), Style::default().fg(Color::Yellow)),
-        Span::styled(title, select_style),
+        Span::styled(title, sel_style),
     ];
 
     if has_run_error {
@@ -220,17 +200,7 @@ fn render_job_line(
     let (icon, icon_color) = status_icon(job.status, job.conclusion);
     let arrow = if expanded { "▼" } else { "▶" };
 
-    let duration = match (job.started_at, job.completed_at) {
-        (Some(start), Some(end)) => {
-            let d = end.signed_duration_since(start);
-            format_duration(d.num_seconds())
-        }
-        (Some(start), None) => {
-            let d = Utc::now().signed_duration_since(start);
-            format_duration(d.num_seconds())
-        }
-        _ => String::new(),
-    };
+    let duration = app::compute_duration(job.started_at, job.completed_at);
 
     let prefix = format!("    {arrow} {icon} ");
     let prefix_display_width = UnicodeWidthStr::width(prefix.as_str());
@@ -242,15 +212,11 @@ fn render_job_line(
     let name_max = max_width.saturating_sub(prefix_display_width + suffix_width);
     let name = truncate(&job.name, name_max);
 
-    let select_style = if is_selected {
-        Style::default().add_modifier(Modifier::REVERSED)
-    } else {
-        Style::default()
-    };
+    let sel_style = select_style(is_selected);
 
     let mut spans = vec![
         Span::styled(prefix, Style::default().fg(icon_color)),
-        Span::styled(name, select_style),
+        Span::styled(name, sel_style),
     ];
 
     if !duration.is_empty() {
@@ -266,17 +232,7 @@ fn render_job_line(
 fn render_step_line(step: &crate::app::Step, is_selected: bool, max_width: usize) -> Line<'static> {
     let (icon, icon_color) = status_icon(step.status, step.conclusion);
 
-    let duration = match (step.started_at, step.completed_at) {
-        (Some(start), Some(end)) => {
-            let d = end.signed_duration_since(start);
-            format_duration(d.num_seconds())
-        }
-        (Some(start), None) => {
-            let d = Utc::now().signed_duration_since(start);
-            format_duration(d.num_seconds())
-        }
-        _ => String::new(),
-    };
+    let duration = app::compute_duration(step.started_at, step.completed_at);
 
     let prefix = format!("        {icon} ");
     let prefix_display_width = UnicodeWidthStr::width(prefix.as_str());
@@ -288,15 +244,11 @@ fn render_step_line(step: &crate::app::Step, is_selected: bool, max_width: usize
     let name_max = max_width.saturating_sub(prefix_display_width + suffix_width);
     let name = truncate(&step.name, name_max);
 
-    let select_style = if is_selected {
-        Style::default().add_modifier(Modifier::REVERSED)
-    } else {
-        Style::default()
-    };
+    let sel_style = select_style(is_selected);
 
     let mut spans = vec![
         Span::styled(prefix, Style::default().fg(icon_color)),
-        Span::styled(name, select_style),
+        Span::styled(name, sel_style),
     ];
 
     if !duration.is_empty() {
@@ -311,17 +263,13 @@ fn render_step_line(step: &crate::app::Step, is_selected: bool, max_width: usize
 
 fn render_loading_line(spinner_frame: usize, is_selected: bool) -> Line<'static> {
     let spinner_char = crate::tui::spinner::frame(spinner_frame);
-    let select_style = if is_selected {
-        Style::default().add_modifier(Modifier::REVERSED)
-    } else {
-        Style::default()
-    };
+    let sel_style = select_style(is_selected);
     Line::from(vec![
         Span::styled(
             format!("    {spinner_char} "),
             Style::default().fg(Color::Yellow),
         ),
-        Span::styled("Loading…", select_style.fg(Color::DarkGray)),
+        Span::styled("Loading…", sel_style.fg(Color::DarkGray)),
     ])
 }
 
@@ -398,7 +346,7 @@ mod tests {
     #[test]
     fn truncate_zero_width() {
         let result = truncate("hello", 0);
-        assert_eq!(result, "…");
+        assert_eq!(result, "");
     }
 
     #[test]
