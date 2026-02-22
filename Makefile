@@ -9,7 +9,8 @@ build:
 
 install: build
 	mkdir -p $(BINDIR)
-	cp target/release/$(BINARY) $(BINDIR)/$(BINARY)
+	rm -f $(BINDIR)/$(BINARY)
+	install -m 755 target/release/$(BINARY) $(BINDIR)/$(BINARY)
 
 uninstall:
 	rm -f $(BINDIR)/$(BINARY)
