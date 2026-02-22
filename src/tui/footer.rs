@@ -13,6 +13,8 @@ pub fn render(f: &mut Frame, area: Rect, state: &AppState) {
         &[("j/k", "scroll"), ("y", "copy"), ("q", "close")]
     } else if state.has_detail_overlay() {
         &[("d/q", "close")]
+    } else if state.has_confirm_overlay() {
+        &[("y", "confirm"), ("n", "cancel")]
     } else if narrow {
         &[
             ("j/k", "nav"),
@@ -20,6 +22,8 @@ pub fn render(f: &mut Frame, area: Rect, state: &AppState) {
             ("d", "detail"),
             ("e", "err"),
             ("o", "open"),
+            ("c", "cancel"),
+            ("x", "delete"),
             ("r", "refresh"),
             ("q", "quit"),
         ]
@@ -31,6 +35,8 @@ pub fn render(f: &mut Frame, area: Rect, state: &AppState) {
             ("d", "details"),
             ("e", "errors"),
             ("o", "open"),
+            ("c", "cancel"),
+            ("x", "delete"),
             ("r", "refresh"),
             ("R", "rerun"),
             ("f", "filter"),

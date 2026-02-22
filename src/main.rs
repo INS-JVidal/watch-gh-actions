@@ -231,6 +231,8 @@ async fn run_app(
                             OverlayMode::Log
                         } else if state.has_detail_overlay() {
                             OverlayMode::Detail
+                        } else if state.has_confirm_overlay() {
+                            OverlayMode::Confirm
                         } else {
                             OverlayMode::None
                         },
@@ -325,6 +327,105 @@ async fn run_app(
                                             }
                                         }
                                     });
+                                }
+                            }
+                        }
+                        Action::CancelRun => {
+                            if let Some(run_id) = state.current_run_id() {
+                                if state.current_run_status() != Some(app::RunStatus::InProgress) {
+                                    state.set_error(
+                                        "Cannot cancel: run is not in progress".to_string(),
+                                    );
+                                } else {
+                                    let title = state
+                                        .current_run_display_title()
+                                        .unwrap_or_else(|| format!("run {run_id}"));
+                                    state.open_confirm_overlay(
+                                        "Confirm Cancel".to_string(),
+                                        format!("Cancel \"{title}\"?"),
+                                        app::ConfirmAction::CancelRun(run_id),
+                                    );
+                                }
+                            }
+                        }
+                        Action::DeleteRun => {
+                            if let Some(run_id) = state.current_run_id() {
+                                if state.current_run_status() == Some(app::RunStatus::InProgress) {
+                                    state.set_error(
+                                        "Cannot delete: run is still in progress".to_string(),
+                                    );
+                                } else {
+                                    let title = state
+                                        .current_run_display_title()
+                                        .unwrap_or_else(|| format!("run {run_id}"));
+                                    state.open_confirm_overlay(
+                                        "Confirm Delete".to_string(),
+                                        format!("Delete \"{title}\"?"),
+                                        app::ConfirmAction::DeleteRun(run_id),
+                                    );
+                                }
+                            }
+                        }
+                        Action::ConfirmYes => {
+                            if let Some(action) = state.confirm_action() {
+                                state.close_confirm_overlay();
+                                match action {
+                                    app::ConfirmAction::CancelRun(run_id) => {
+                                        let repo2 = repo.to_string();
+                                        let tx2 = tx.clone();
+                                        spawn_monitored(tx.clone(), "cancel_run", async move {
+                                            match gh::executor::cancel_run(&repo2, run_id).await {
+                                                Ok(()) => {
+                                                    if tx2
+                                                        .send(AppEvent::CancelSuccess(run_id))
+                                                        .is_err()
+                                                    {
+                                                        tracing::warn!(
+                                                            "cancel_run: channel closed"
+                                                        );
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    if tx2
+                                                        .send(AppEvent::Error(format!("{e}")))
+                                                        .is_err()
+                                                    {
+                                                        tracing::warn!(
+                                                            "cancel_run: channel closed"
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        });
+                                    }
+                                    app::ConfirmAction::DeleteRun(run_id) => {
+                                        let repo2 = repo.to_string();
+                                        let tx2 = tx.clone();
+                                        spawn_monitored(tx.clone(), "delete_run", async move {
+                                            match gh::executor::delete_run(&repo2, run_id).await {
+                                                Ok(()) => {
+                                                    if tx2
+                                                        .send(AppEvent::DeleteSuccess(run_id))
+                                                        .is_err()
+                                                    {
+                                                        tracing::warn!(
+                                                            "delete_run: channel closed"
+                                                        );
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    if tx2
+                                                        .send(AppEvent::Error(format!("{e}")))
+                                                        .is_err()
+                                                    {
+                                                        tracing::warn!(
+                                                            "delete_run: channel closed"
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -594,6 +695,17 @@ async fn run_app(
                         state.set_error(e);
                     }
                 },
+                AppEvent::CancelSuccess(run_id) => {
+                    state.add_notification(run_id, "Run cancelled".to_string());
+                    // Trigger a refresh to pick up the new status
+                    poll_start = Instant::now()
+                        .checked_sub(Duration::from_secs(state.poll_interval))
+                        .unwrap_or(poll_start);
+                }
+                AppEvent::DeleteSuccess(run_id) => {
+                    state.remove_run(run_id);
+                    state.add_notification(run_id, "Run deleted".to_string());
+                }
                 AppEvent::RerunSuccess(run_id) => {
                     state.log_cache.retain(|(r, _), _| *r != run_id);
                     state.add_notification(run_id, "Rerun triggered".to_string());

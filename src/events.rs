@@ -27,6 +27,8 @@ pub enum AppEvent {
     },
     ClipboardResult(Result<(), String>),
     RerunSuccess(u64),
+    CancelSuccess(u64),
+    DeleteSuccess(u64),
     RunError {
         run_id: u64,
         error: String,

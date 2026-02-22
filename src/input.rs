@@ -10,6 +10,9 @@ pub enum Action {
     Collapse,
     Toggle,
     Refresh,
+    CancelRun,
+    DeleteRun,
+    ConfirmYes,
     RerunFailed,
     OpenBrowser,
     CycleFilter,
@@ -35,6 +38,7 @@ pub enum OverlayMode {
     None,
     Log,
     Detail,
+    Confirm,
 }
 
 /// Captures the UI state needed to interpret a key press.
@@ -80,6 +84,15 @@ pub fn map_key(key: KeyEvent, ctx: &InputContext) -> Action {
         };
     }
 
+    // Confirm overlay mode
+    if ctx.overlay == OverlayMode::Confirm {
+        return match key.code {
+            KeyCode::Char('y') => Action::ConfirmYes,
+            KeyCode::Char('n' | 'q') | KeyCode::Esc => Action::CloseOverlay,
+            _ => Action::None,
+        };
+    }
+
     match key.code {
         KeyCode::Char('q') => Action::Quit,
         KeyCode::Esc => {
@@ -95,6 +108,8 @@ pub fn map_key(key: KeyEvent, ctx: &InputContext) -> Action {
         KeyCode::Left | KeyCode::Char('h') => Action::Collapse,
         KeyCode::Char(' ') => Action::Toggle,
         KeyCode::Char('r') if !ctx.is_loading => Action::Refresh,
+        KeyCode::Char('c') => Action::CancelRun,
+        KeyCode::Char('x') => Action::DeleteRun,
         KeyCode::Char('R') => Action::RerunFailed,
         KeyCode::Char('o') => Action::OpenBrowser,
         KeyCode::Char('e') => Action::ViewLogs,
@@ -449,6 +464,74 @@ mod tests {
         assert_eq!(
             map_key(press(KeyCode::Esc), &ctx_detail()),
             Action::CloseOverlay
+        );
+    }
+
+    // --- Confirm overlay mode tests ---
+
+    fn ctx_confirm() -> InputContext {
+        InputContext {
+            overlay: OverlayMode::Confirm,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn cancel_run_c() {
+        assert_eq!(
+            map_key(press(KeyCode::Char('c')), &ctx()),
+            Action::CancelRun
+        );
+    }
+
+    #[test]
+    fn delete_run_x() {
+        assert_eq!(
+            map_key(press(KeyCode::Char('x')), &ctx()),
+            Action::DeleteRun
+        );
+    }
+
+    #[test]
+    fn confirm_yes_y() {
+        assert_eq!(
+            map_key(press(KeyCode::Char('y')), &ctx_confirm()),
+            Action::ConfirmYes
+        );
+    }
+
+    #[test]
+    fn confirm_close_n() {
+        assert_eq!(
+            map_key(press(KeyCode::Char('n')), &ctx_confirm()),
+            Action::CloseOverlay
+        );
+    }
+
+    #[test]
+    fn confirm_close_esc() {
+        assert_eq!(
+            map_key(press(KeyCode::Esc), &ctx_confirm()),
+            Action::CloseOverlay
+        );
+    }
+
+    #[test]
+    fn confirm_ctrl_c_quits() {
+        assert_eq!(
+            map_key(
+                press_with(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                &ctx_confirm()
+            ),
+            Action::Quit
+        );
+    }
+
+    #[test]
+    fn confirm_ignores_other_keys() {
+        assert_eq!(
+            map_key(press(KeyCode::Char('z')), &ctx_confirm()),
+            Action::None
         );
     }
 

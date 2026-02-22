@@ -233,10 +233,23 @@ pub struct DetailOverlay {
     pub lines: Vec<(String, String)>,
 }
 
+pub struct ConfirmOverlay {
+    pub title: String,
+    pub message: String,
+    pub action: ConfirmAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfirmAction {
+    CancelRun(u64),
+    DeleteRun(u64),
+}
+
 pub enum ActiveOverlay {
     None,
     Log(LogOverlay),
     Detail(DetailOverlay),
+    Confirm(ConfirmOverlay),
 }
 
 /// Immutable configuration set at startup.
@@ -769,6 +782,76 @@ impl AppState {
         if matches!(self.overlay, ActiveOverlay::Detail(_)) {
             self.overlay = ActiveOverlay::None;
         }
+    }
+
+    // --- Confirm overlay methods ---
+
+    pub fn has_confirm_overlay(&self) -> bool {
+        matches!(self.overlay, ActiveOverlay::Confirm(_))
+    }
+
+    pub fn confirm_action(&self) -> Option<ConfirmAction> {
+        if let ActiveOverlay::Confirm(ref overlay) = self.overlay {
+            Some(overlay.action)
+        } else {
+            None
+        }
+    }
+
+    pub fn open_confirm_overlay(&mut self, title: String, message: String, action: ConfirmAction) {
+        self.overlay = ActiveOverlay::Confirm(ConfirmOverlay {
+            title,
+            message,
+            action,
+        });
+    }
+
+    pub fn close_confirm_overlay(&mut self) {
+        if matches!(self.overlay, ActiveOverlay::Confirm(_)) {
+            self.overlay = ActiveOverlay::None;
+        }
+    }
+
+    /// Returns a display title for the current run (e.g. `"CI #42"`).
+    pub fn current_run_display_title(&self) -> Option<String> {
+        self.tree_items.get(self.cursor).and_then(|item| {
+            self.runs
+                .get(item.run_idx)
+                .map(|r| format!("{} #{}", r.name, r.number))
+        })
+    }
+
+    /// Remove a run by ID: prune expanded sets, log cache, run errors,
+    /// close any overlay referencing this run, rebuild tree, and clamp cursor.
+    pub fn remove_run(&mut self, run_id: u64) {
+        let Some(idx) = self.runs.iter().position(|r| r.database_id == run_id) else {
+            return;
+        };
+        self.runs.remove(idx);
+
+        // Prune expanded state
+        self.expanded_runs.remove(&run_id);
+        self.expanded_jobs.retain(|(r, _)| *r != run_id);
+
+        // Prune log cache entries for this run
+        self.log_cache.retain(|(r, _), _| *r != run_id);
+
+        // Prune run errors
+        self.run_errors.remove(&run_id);
+
+        // Close overlay if it references this run
+        let should_close = match &self.overlay {
+            ActiveOverlay::Log(o) => o.run_id == run_id,
+            ActiveOverlay::Confirm(o) => match o.action {
+                ConfirmAction::CancelRun(id) | ConfirmAction::DeleteRun(id) => id == run_id,
+            },
+            _ => false,
+        };
+        if should_close {
+            self.overlay = ActiveOverlay::None;
+        }
+
+        self.rebuild_tree();
     }
 
     pub fn current_item_ids(&self) -> Option<(u64, Option<u64>)> {
@@ -1454,6 +1537,97 @@ mod tests {
         assert_eq!(unwrap_log_overlay(&state).lines.len(), LOG_MAX_LINES);
         // Should keep last 500 lines (100..599)
         assert!(unwrap_log_overlay(&state).lines[0].contains("100"));
+    }
+
+    // --- Confirm overlay tests ---
+
+    #[test]
+    fn open_close_confirm_overlay() {
+        let mut state = state_with_runs(vec![make_run(1, RunStatus::InProgress, None)]);
+        assert!(!state.has_confirm_overlay());
+
+        state.open_confirm_overlay(
+            "Confirm".to_string(),
+            "Cancel run?".to_string(),
+            ConfirmAction::CancelRun(1),
+        );
+        assert!(state.has_confirm_overlay());
+        assert_eq!(state.confirm_action(), Some(ConfirmAction::CancelRun(1)));
+
+        state.close_confirm_overlay();
+        assert!(!state.has_confirm_overlay());
+        assert_eq!(state.confirm_action(), None);
+    }
+
+    #[test]
+    fn confirm_overlay_is_exclusive() {
+        let mut state = state_with_runs(vec![make_run(
+            1,
+            RunStatus::Completed,
+            Some(Conclusion::Failure),
+        )]);
+        // Open a log overlay first
+        state.open_log_overlay("Test".to_string(), "log content", 1, None);
+        assert!(state.has_log_overlay());
+
+        // Opening confirm replaces it
+        state.open_confirm_overlay(
+            "Confirm".to_string(),
+            "Delete run?".to_string(),
+            ConfirmAction::DeleteRun(1),
+        );
+        assert!(state.has_confirm_overlay());
+        assert!(!state.has_log_overlay());
+    }
+
+    #[test]
+    fn close_confirm_does_nothing_when_not_confirm() {
+        let mut state = state_with_runs(vec![]);
+        state.open_log_overlay("Test".to_string(), "log content", 1, None);
+        assert!(state.has_log_overlay());
+
+        // close_confirm_overlay should not close a log overlay
+        state.close_confirm_overlay();
+        assert!(state.has_log_overlay());
+    }
+
+    #[test]
+    fn delete_run_removes_from_state() {
+        let mut state = state_with_runs(vec![
+            make_run(1, RunStatus::Completed, Some(Conclusion::Success)),
+            make_run(2, RunStatus::Completed, Some(Conclusion::Failure)),
+            make_run(3, RunStatus::Completed, Some(Conclusion::Success)),
+        ]);
+        assert_eq!(state.runs.len(), 3);
+        assert_eq!(state.tree_items.len(), 3);
+
+        state.remove_run(2);
+        assert_eq!(state.runs.len(), 2);
+        assert_eq!(state.tree_items.len(), 2);
+        assert!(state.runs.iter().all(|r| r.database_id != 2));
+    }
+
+    #[test]
+    fn delete_run_nonexistent_is_noop() {
+        let mut state = state_with_runs(vec![make_run(
+            1,
+            RunStatus::Completed,
+            Some(Conclusion::Success),
+        )]);
+        state.remove_run(999); // should not panic
+        assert_eq!(state.runs.len(), 1);
+    }
+
+    #[test]
+    fn delete_run_clamps_cursor() {
+        let mut state = state_with_runs(vec![
+            make_run(1, RunStatus::Completed, Some(Conclusion::Success)),
+            make_run(2, RunStatus::Completed, Some(Conclusion::Success)),
+        ]);
+        state.cursor = 1; // on run 2
+        state.remove_run(2);
+        assert_eq!(state.runs.len(), 1);
+        assert_eq!(state.cursor, 0); // clamped
     }
 
     #[test]

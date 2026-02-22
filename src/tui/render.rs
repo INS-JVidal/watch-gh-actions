@@ -51,6 +51,9 @@ pub fn render(f: &mut Frame, state: &AppState) {
         crate::app::ActiveOverlay::Detail(overlay) => {
             crate::tui::detail_overlay::render(f, overlay);
         }
+        crate::app::ActiveOverlay::Confirm(ref overlay) => {
+            crate::tui::confirm_overlay::render(f, overlay);
+        }
         crate::app::ActiveOverlay::None => {}
     }
 }

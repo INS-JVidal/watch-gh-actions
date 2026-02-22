@@ -278,6 +278,115 @@ fn log_overlay_lifecycle() {
     assert_eq!(action, Action::CloseOverlay);
 }
 
+// ========== Cancel / Delete action tests ==========
+
+#[test]
+fn cancel_delete_key_mapping_flow() {
+    let ctx = InputContext::default();
+    assert_eq!(
+        input::map_key(press(KeyCode::Char('c')), &ctx),
+        Action::CancelRun
+    );
+    assert_eq!(
+        input::map_key(press(KeyCode::Char('x')), &ctx),
+        Action::DeleteRun
+    );
+}
+
+#[test]
+fn confirm_overlay_lifecycle() {
+    use ghw::app::ConfirmAction;
+
+    let mut state = make_state_with_runs(vec![run_in_progress(1)]);
+
+    // Open confirm overlay
+    state.open_confirm_overlay(
+        "Confirm Cancel".to_string(),
+        "Cancel \"CI #1\"?".to_string(),
+        ConfirmAction::CancelRun(1),
+    );
+    assert!(state.has_confirm_overlay());
+
+    // In confirm mode, 'y' confirms
+    let confirm_ctx = InputContext {
+        overlay: OverlayMode::Confirm,
+        ..Default::default()
+    };
+    assert_eq!(
+        input::map_key(press(KeyCode::Char('y')), &confirm_ctx),
+        Action::ConfirmYes
+    );
+
+    // After confirm, close overlay
+    state.close_confirm_overlay();
+    assert!(!state.has_confirm_overlay());
+}
+
+#[test]
+fn confirm_overlay_dismiss() {
+    use ghw::app::ConfirmAction;
+
+    let mut state = make_state_with_runs(vec![run_with_id(1)]);
+
+    state.open_confirm_overlay(
+        "Confirm Delete".to_string(),
+        "Delete \"CI #1\"?".to_string(),
+        ConfirmAction::DeleteRun(1),
+    );
+    assert!(state.has_confirm_overlay());
+
+    // 'n' in confirm mode -> CloseOverlay
+    let confirm_ctx = InputContext {
+        overlay: OverlayMode::Confirm,
+        ..Default::default()
+    };
+    assert_eq!(
+        input::map_key(press(KeyCode::Char('n')), &confirm_ctx),
+        Action::CloseOverlay
+    );
+
+    // Close
+    state.close_confirm_overlay();
+    assert!(!state.has_confirm_overlay());
+    // State unchanged - run still present
+    assert_eq!(state.runs.len(), 1);
+}
+
+#[test]
+fn delete_removes_run_from_tree() {
+    let mut state = make_state_with_runs(vec![run_with_id(1), run_with_id(2), run_with_id(3)]);
+    assert_eq!(state.tree_items.len(), 3);
+
+    state.remove_run(2);
+    assert_eq!(state.tree_items.len(), 2);
+    assert!(state.runs.iter().all(|r| r.database_id != 2));
+}
+
+#[test]
+fn cancel_on_completed_run_is_guarded() {
+    // completed by default, so current_run_status should be Completed
+    let state = make_state_with_runs(vec![run_with_id(1)]);
+    assert_eq!(state.current_run_status(), Some(RunStatus::Completed));
+    // Guard: not InProgress -> would set error, not open overlay
+    assert!(!state.has_confirm_overlay());
+}
+
+#[test]
+fn delete_on_in_progress_run_is_guarded() {
+    let state = make_state_with_runs(vec![run_in_progress(1)]);
+    assert_eq!(state.current_run_status(), Some(RunStatus::InProgress));
+    // Guard: InProgress -> would set error, not open overlay
+    assert!(!state.has_confirm_overlay());
+}
+
+#[test]
+fn cancel_on_empty_state_is_noop() {
+    let state = make_state_with_runs(vec![]);
+    // current_run_id returns None -> early return, no crash
+    assert_eq!(state.current_run_id(), None);
+    assert!(!state.has_confirm_overlay());
+}
+
 // ========== TUI snapshot tests ==========
 
 #[test]

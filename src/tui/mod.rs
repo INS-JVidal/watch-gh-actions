@@ -1,3 +1,4 @@
+pub mod confirm_overlay;
 pub mod detail_overlay;
 pub mod footer;
 pub mod header;
