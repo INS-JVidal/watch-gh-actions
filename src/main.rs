@@ -166,9 +166,10 @@ async fn run_app(
         let elapsed = poll_start.elapsed().as_secs();
         state.next_poll_in = state.poll_interval.saturating_sub(elapsed);
 
-        // Prune old notifications and stale errors
+        // Prune old notifications, stale errors, and expired log cache entries
         state.prune_notifications();
         state.prune_error();
+        state.prune_log_cache();
 
         // Process events
         if let Some(event) = events.next().await {
@@ -437,9 +438,10 @@ async fn run_app(
                         }
                     }
 
-                    // Prune expanded_jobs for runs no longer present
+                    // Prune expanded_runs and expanded_jobs for runs no longer present
                     let run_ids: std::collections::HashSet<u64> =
                         state.runs.iter().map(|r| r.database_id).collect();
+                    state.expanded_runs.retain(|id| run_ids.contains(id));
                     state
                         .expanded_jobs
                         .retain(|(run_id, _)| run_ids.contains(run_id));
