@@ -12,6 +12,49 @@ use ratatui::Terminal;
 use std::future::Future;
 use std::time::Duration;
 
+const GHW_ART: &[&str] = &[
+    r"            __                                    ",
+    r"          |  \                                    ",
+    r"   ______ | ▓▓____  __   __   __                  ",
+    r"  /      \| ▓▓    \|  \ |  \ |  \                 ",
+    r" |  ▓▓▓▓▓▓\ ▓▓▓▓▓▓▓\ ▓▓ | ▓▓ | ▓▓               ",
+    r" | ▓▓  | ▓▓ ▓▓  | ▓▓ ▓▓ | ▓▓ | ▓▓               ",
+    r" | ▓▓__| ▓▓ ▓▓  | ▓▓ ▓▓_/ ▓▓_/ ▓▓               ",
+    r"  \▓▓    ▓▓ ▓▓  | ▓▓\▓▓   ▓▓   ▓▓               ",
+    r"  _\▓▓▓▓▓▓▓\▓▓   \▓▓ \▓▓▓▓▓\▓▓▓▓                ",
+    r" |  \__| ▓▓                                       ",
+    r"  \▓▓    ▓▓                                       ",
+    r"   \▓▓▓▓▓▓                                        ",
+];
+
+/// Interpolate a 3-stop gradient: Red → Magenta → Violet across `total_lines`.
+fn gradient_color(line_idx: usize, total_lines: usize) -> Color {
+    if total_lines <= 1 {
+        return Color::Rgb(255, 0, 0);
+    }
+    let t = line_idx as f64 / (total_lines - 1) as f64;
+
+    let (r, g, b) = if t <= 0.5 {
+        // Red (255, 0, 0) → Magenta (220, 0, 155)
+        let s = t * 2.0;
+        (
+            (255.0 + (220.0 - 255.0) * s) as u8,
+            0,
+            (155.0 * s) as u8,
+        )
+    } else {
+        // Magenta (220, 0, 155) → Violet (136, 0, 255)
+        let s = (t - 0.5) * 2.0;
+        (
+            (220.0 + (136.0 - 220.0) * s) as u8,
+            0,
+            (155.0 + (255.0 - 155.0) * s) as u8,
+        )
+    };
+
+    Color::Rgb(r, g, b)
+}
+
 #[derive(Clone)]
 enum PhaseStatus {
     InProgress,
@@ -35,48 +78,58 @@ pub struct StartupResult {
 fn render_startup<B: Backend>(terminal: &mut Terminal<B>, phases: &[StartupPhase], frame: usize) {
     let _ = terminal.draw(|f| {
         let area = f.area();
-        let total_lines = phases.len() as u16;
+        let art_height = GHW_ART.len() as u16;
+        let total_lines = art_height + 1 + phases.len() as u16;
+        let top_offset = (area.height.saturating_sub(total_lines) / 2).saturating_sub(4);
         let vertical = Layout::vertical([
-            Constraint::Min(0),
+            Constraint::Length(top_offset),
             Constraint::Length(total_lines),
             Constraint::Min(0),
         ])
         .split(area);
 
-        let lines: Vec<Line> = phases
+        let mut lines: Vec<Line> = GHW_ART
             .iter()
-            .map(|phase| {
-                let (icon, icon_style) = match &phase.status {
-                    PhaseStatus::InProgress => (
-                        spinner::frame(frame).to_string(),
-                        Style::default().fg(Color::Yellow),
-                    ),
-                    PhaseStatus::Done => {
-                        ("\u{2713}".to_string(), Style::default().fg(Color::Green))
-                    }
-                    PhaseStatus::Failed(_) => {
-                        ("\u{2717}".to_string(), Style::default().fg(Color::Red))
-                    }
-                };
-
-                let mut spans = vec![
-                    Span::styled(format!("  {icon} "), icon_style),
-                    Span::styled(&phase.label, Style::default().fg(Color::White)),
-                ];
-
-                if let Some(detail) = &phase.detail {
-                    spans.push(Span::raw("  "));
-                    spans.push(Span::styled(detail, Style::default().fg(Color::DarkGray)));
-                }
-
-                if let PhaseStatus::Failed(msg) = &phase.status {
-                    spans.push(Span::raw("  "));
-                    spans.push(Span::styled(msg, Style::default().fg(Color::Red)));
-                }
-
-                Line::from(spans)
+            .enumerate()
+            .map(|(i, line)| {
+                let color = gradient_color(i, GHW_ART.len());
+                Line::from(Span::styled(*line, Style::default().fg(color)))
             })
             .collect();
+
+        lines.push(Line::from(""));
+
+        lines.extend(phases.iter().map(|phase| {
+            let (icon, icon_style) = match &phase.status {
+                PhaseStatus::InProgress => (
+                    spinner::frame(frame).to_string(),
+                    Style::default().fg(Color::Yellow),
+                ),
+                PhaseStatus::Done => {
+                    ("\u{2713}".to_string(), Style::default().fg(Color::Green))
+                }
+                PhaseStatus::Failed(_) => {
+                    ("\u{2717}".to_string(), Style::default().fg(Color::Red))
+                }
+            };
+
+            let mut spans = vec![
+                Span::styled(format!("  {icon} "), icon_style),
+                Span::styled(&phase.label, Style::default().fg(Color::White)),
+            ];
+
+            if let Some(detail) = &phase.detail {
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled(detail, Style::default().fg(Color::DarkGray)));
+            }
+
+            if let PhaseStatus::Failed(msg) = &phase.status {
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled(msg, Style::default().fg(Color::Red)));
+            }
+
+            Line::from(spans)
+        }));
 
         let paragraph = Paragraph::new(lines);
         f.render_widget(paragraph, vertical[1]);
