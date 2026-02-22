@@ -145,19 +145,31 @@ mod tests {
     }
 
     fn ctx_error() -> InputContext {
-        InputContext { has_error: true, ..Default::default() }
+        InputContext {
+            has_error: true,
+            ..Default::default()
+        }
     }
 
     fn ctx_loading() -> InputContext {
-        InputContext { is_loading: true, ..Default::default() }
+        InputContext {
+            is_loading: true,
+            ..Default::default()
+        }
     }
 
     fn ctx_log() -> InputContext {
-        InputContext { overlay: OverlayMode::Log, ..Default::default() }
+        InputContext {
+            overlay: OverlayMode::Log,
+            ..Default::default()
+        }
     }
 
     fn ctx_detail() -> InputContext {
-        InputContext { overlay: OverlayMode::Detail, ..Default::default() }
+        InputContext {
+            overlay: OverlayMode::Detail,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -172,13 +184,19 @@ mod tests {
 
     #[test]
     fn esc_dismisses_error_when_present() {
-        assert_eq!(map_key(press(KeyCode::Esc), &ctx_error()), Action::DismissError);
+        assert_eq!(
+            map_key(press(KeyCode::Esc), &ctx_error()),
+            Action::DismissError
+        );
     }
 
     #[test]
     fn ctrl_c_quits() {
         assert_eq!(
-            map_key(press_with(KeyCode::Char('c'), KeyModifiers::CONTROL), &ctx()),
+            map_key(
+                press_with(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                &ctx()
+            ),
             Action::Quit
         );
     }
@@ -240,27 +258,42 @@ mod tests {
 
     #[test]
     fn refresh_blocked_while_loading() {
-        assert_eq!(map_key(press(KeyCode::Char('r')), &ctx_loading()), Action::None);
+        assert_eq!(
+            map_key(press(KeyCode::Char('r')), &ctx_loading()),
+            Action::None
+        );
     }
 
     #[test]
     fn rerun_failed_capital_r() {
-        assert_eq!(map_key(press(KeyCode::Char('R')), &ctx()), Action::RerunFailed);
+        assert_eq!(
+            map_key(press(KeyCode::Char('R')), &ctx()),
+            Action::RerunFailed
+        );
     }
 
     #[test]
     fn open_browser_o() {
-        assert_eq!(map_key(press(KeyCode::Char('o')), &ctx()), Action::OpenBrowser);
+        assert_eq!(
+            map_key(press(KeyCode::Char('o')), &ctx()),
+            Action::OpenBrowser
+        );
     }
 
     #[test]
     fn cycle_filter_f() {
-        assert_eq!(map_key(press(KeyCode::Char('f')), &ctx()), Action::CycleFilter);
+        assert_eq!(
+            map_key(press(KeyCode::Char('f')), &ctx()),
+            Action::CycleFilter
+        );
     }
 
     #[test]
     fn filter_branch_b() {
-        assert_eq!(map_key(press(KeyCode::Char('b')), &ctx()), Action::FilterBranch);
+        assert_eq!(
+            map_key(press(KeyCode::Char('b')), &ctx()),
+            Action::FilterBranch
+        );
     }
 
     #[test]
@@ -298,17 +331,26 @@ mod tests {
 
     #[test]
     fn overlay_scroll_down_j() {
-        assert_eq!(map_key(press(KeyCode::Char('j')), &ctx_log()), Action::ScrollDown);
+        assert_eq!(
+            map_key(press(KeyCode::Char('j')), &ctx_log()),
+            Action::ScrollDown
+        );
     }
 
     #[test]
     fn overlay_scroll_up_k() {
-        assert_eq!(map_key(press(KeyCode::Char('k')), &ctx_log()), Action::ScrollUp);
+        assert_eq!(
+            map_key(press(KeyCode::Char('k')), &ctx_log()),
+            Action::ScrollUp
+        );
     }
 
     #[test]
     fn overlay_page_down() {
-        assert_eq!(map_key(press(KeyCode::PageDown), &ctx_log()), Action::PageDown);
+        assert_eq!(
+            map_key(press(KeyCode::PageDown), &ctx_log()),
+            Action::PageDown
+        );
     }
 
     #[test]
@@ -318,39 +360,60 @@ mod tests {
 
     #[test]
     fn overlay_scroll_to_top_g() {
-        assert_eq!(map_key(press(KeyCode::Char('g')), &ctx_log()), Action::ScrollToTop);
+        assert_eq!(
+            map_key(press(KeyCode::Char('g')), &ctx_log()),
+            Action::ScrollToTop
+        );
     }
 
     #[test]
     #[allow(non_snake_case)]
     fn overlay_scroll_to_bottom_G() {
-        assert_eq!(map_key(press(KeyCode::Char('G')), &ctx_log()), Action::ScrollToBottom);
+        assert_eq!(
+            map_key(press(KeyCode::Char('G')), &ctx_log()),
+            Action::ScrollToBottom
+        );
     }
 
     #[test]
     fn overlay_copy_y() {
-        assert_eq!(map_key(press(KeyCode::Char('y')), &ctx_log()), Action::CopyToClipboard);
+        assert_eq!(
+            map_key(press(KeyCode::Char('y')), &ctx_log()),
+            Action::CopyToClipboard
+        );
     }
 
     #[test]
     fn overlay_close_q() {
-        assert_eq!(map_key(press(KeyCode::Char('q')), &ctx_log()), Action::CloseOverlay);
+        assert_eq!(
+            map_key(press(KeyCode::Char('q')), &ctx_log()),
+            Action::CloseOverlay
+        );
     }
 
     #[test]
     fn overlay_close_esc() {
-        assert_eq!(map_key(press(KeyCode::Esc), &ctx_log()), Action::CloseOverlay);
+        assert_eq!(
+            map_key(press(KeyCode::Esc), &ctx_log()),
+            Action::CloseOverlay
+        );
     }
 
     #[test]
     fn overlay_close_e() {
-        assert_eq!(map_key(press(KeyCode::Char('e')), &ctx_log()), Action::CloseOverlay);
+        assert_eq!(
+            map_key(press(KeyCode::Char('e')), &ctx_log()),
+            Action::CloseOverlay
+        );
     }
 
     #[test]
     fn overlay_ctrl_c_quits() {
         assert_eq!(
-            map_key(press_with(KeyCode::Char('c'), KeyModifiers::CONTROL), &ctx_log()),
+            map_key(
+                press_with(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                &ctx_log()
+            ),
             Action::Quit
         );
     }
@@ -359,28 +422,43 @@ mod tests {
 
     #[test]
     fn show_details_d() {
-        assert_eq!(map_key(press(KeyCode::Char('d')), &ctx()), Action::ShowDetails);
+        assert_eq!(
+            map_key(press(KeyCode::Char('d')), &ctx()),
+            Action::ShowDetails
+        );
     }
 
     #[test]
     fn detail_overlay_close_d() {
-        assert_eq!(map_key(press(KeyCode::Char('d')), &ctx_detail()), Action::CloseOverlay);
+        assert_eq!(
+            map_key(press(KeyCode::Char('d')), &ctx_detail()),
+            Action::CloseOverlay
+        );
     }
 
     #[test]
     fn detail_overlay_close_q() {
-        assert_eq!(map_key(press(KeyCode::Char('q')), &ctx_detail()), Action::CloseOverlay);
+        assert_eq!(
+            map_key(press(KeyCode::Char('q')), &ctx_detail()),
+            Action::CloseOverlay
+        );
     }
 
     #[test]
     fn detail_overlay_close_esc() {
-        assert_eq!(map_key(press(KeyCode::Esc), &ctx_detail()), Action::CloseOverlay);
+        assert_eq!(
+            map_key(press(KeyCode::Esc), &ctx_detail()),
+            Action::CloseOverlay
+        );
     }
 
     #[test]
     fn detail_overlay_ctrl_c_quits() {
         assert_eq!(
-            map_key(press_with(KeyCode::Char('c'), KeyModifiers::CONTROL), &ctx_detail()),
+            map_key(
+                press_with(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                &ctx_detail()
+            ),
             Action::Quit
         );
     }

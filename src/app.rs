@@ -23,7 +23,9 @@ pub fn compute_duration(
 ) -> String {
     match (started_at, completed_at) {
         (Some(start), Some(end)) => format_duration(end.signed_duration_since(start).num_seconds()),
-        (Some(start), None) => format_duration(Utc::now().signed_duration_since(start).num_seconds()),
+        (Some(start), None) => {
+            format_duration(Utc::now().signed_duration_since(start).num_seconds())
+        }
         _ => String::new(),
     }
 }
@@ -51,6 +53,14 @@ pub fn truncate(s: &str, max_width: usize) -> String {
         }
         result
     }
+}
+
+/// A snapshot of a run's state at a given poll, used for change detection.
+#[derive(Debug, Clone, Copy)]
+pub struct SnapshotEntry {
+    pub status: RunStatus,
+    pub conclusion: Option<Conclusion>,
+    pub last_seen_poll: u64,
 }
 
 // Polling intervals (seconds)
@@ -101,7 +111,6 @@ pub enum Conclusion {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // Fields are part of the GitHub API contract
 pub struct WorkflowRun {
     pub database_id: u64,
     pub display_title: String,
@@ -116,15 +125,13 @@ pub struct WorkflowRun {
     pub event: String,
     pub number: u64,
     pub url: String,
+    /// `None` = not yet fetched, `Some(vec)` = fetched (possibly empty).
     #[serde(skip)]
-    pub jobs: Vec<Job>,
-    #[serde(skip)]
-    pub jobs_fetched: bool,
+    pub jobs: Option<Vec<Job>>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 pub struct Job {
     #[serde(default)]
     pub database_id: Option<u64>,
@@ -141,7 +148,6 @@ pub struct Job {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 pub struct Step {
     pub name: String,
     pub status: RunStatus,
@@ -182,11 +188,11 @@ impl AppState {
         match item.level {
             TreeLevel::Run => Some(ResolvedItem::Run(run)),
             TreeLevel::Job => {
-                let job = run.jobs.get(item.job_idx?)?;
+                let job = run.jobs.as_ref()?.get(item.job_idx?)?;
                 Some(ResolvedItem::Job(job))
             }
             TreeLevel::Step => {
-                let job = run.jobs.get(item.job_idx?)?;
+                let job = run.jobs.as_ref()?.get(item.job_idx?)?;
                 let step = job.steps.get(item.step_idx?)?;
                 Some(ResolvedItem::Step(step))
             }
@@ -246,7 +252,7 @@ pub struct AppState {
 
     // Run data
     pub runs: Vec<WorkflowRun>,
-    pub previous_snapshot: HashMap<u64, (RunStatus, Option<Conclusion>, u64)>,
+    pub previous_snapshot: HashMap<u64, SnapshotEntry>,
     pub poll_count: u64,
 
     // Tree navigation
@@ -295,7 +301,7 @@ impl AppState {
                 limit,
                 workflow_filter,
             },
-            runs: Vec::new(),
+            runs: vec![],
             previous_snapshot: HashMap::new(),
             poll_count: 0,
             tree_items: Vec::new(),
@@ -334,9 +340,9 @@ impl AppState {
                 expanded: run_expanded,
             });
             if run_expanded {
-                if run.jobs_fetched {
+                if let Some(jobs) = &run.jobs {
                     let items_before = items.len();
-                    for (job_idx, job) in run.jobs.iter().enumerate() {
+                    for (job_idx, job) in jobs.iter().enumerate() {
                         let Some(job_db_id) = job.database_id else {
                             continue;
                         };
@@ -349,7 +355,7 @@ impl AppState {
                             expanded: job_expanded,
                         });
                         if job_expanded {
-                            for (step_idx, _step) in run.jobs[job_idx].steps.iter().enumerate() {
+                            for (step_idx, _step) in jobs[job_idx].steps.iter().enumerate() {
                                 items.push(TreeItem {
                                     level: TreeLevel::Step,
                                     run_idx: *run_idx,
@@ -362,7 +368,7 @@ impl AppState {
                     }
                     // If all jobs were skipped (e.g. all have database_id: None),
                     // show a Loading placeholder so the expanded run isn't empty
-                    if items.len() == items_before && !run.jobs.is_empty() {
+                    if items.len() == items_before && !jobs.is_empty() {
                         items.push(TreeItem {
                             level: TreeLevel::Loading,
                             run_idx: *run_idx,
@@ -437,7 +443,12 @@ impl AppState {
     }
 
     fn job_db_id_for(&self, run_idx: usize, job_idx: usize) -> Option<u64> {
-        self.runs.get(run_idx)?.jobs.get(job_idx)?.database_id
+        self.runs
+            .get(run_idx)?
+            .jobs
+            .as_ref()?
+            .get(job_idx)?
+            .database_id
     }
 
     /// Remove a run and all its child jobs from the expanded sets.
@@ -494,8 +505,10 @@ impl AppState {
                     if !self.expanded_runs.contains(&run_id) {
                         self.expanded_runs.insert(run_id);
                         self.rebuild_tree();
-                        let needs_fetch =
-                            self.runs.get(item.run_idx).is_some_and(|r| !r.jobs_fetched);
+                        let needs_fetch = self
+                            .runs
+                            .get(item.run_idx)
+                            .is_some_and(|r| r.jobs.is_none());
                         return Some((item.run_idx, needs_fetch));
                     }
                 }
@@ -765,7 +778,7 @@ impl AppState {
         match item.level {
             TreeLevel::Run => Some((run_id, None)),
             TreeLevel::Job | TreeLevel::Step => {
-                let job = run.jobs.get(item.job_idx?)?;
+                let job = run.jobs.as_ref()?.get(item.job_idx?)?;
                 Some((run_id, job.database_id))
             }
             TreeLevel::Loading => None,
@@ -817,8 +830,7 @@ mod tests {
             event: "push".to_string(),
             number: id,
             url: format!("https://github.com/test/repo/actions/runs/{}", id),
-            jobs: Vec::new(),
-            jobs_fetched: false,
+            jobs: None,
         }
     }
 
@@ -935,12 +947,11 @@ mod tests {
     #[test]
     fn expanded_run_shows_jobs() {
         let mut run = make_run(1, RunStatus::Completed, Some(Conclusion::Success));
-        run.jobs = vec![make_job(
+        run.jobs = Some(vec![make_job(
             "build",
             RunStatus::Completed,
             Some(Conclusion::Success),
-        )];
-        run.jobs_fetched = true;
+        )]);
         let mut state = state_with_runs(vec![run]);
         state.expanded_runs.insert(1);
         state.rebuild_tree();
@@ -951,12 +962,11 @@ mod tests {
     #[test]
     fn expanded_job_shows_steps() {
         let mut run = make_run(1, RunStatus::Completed, Some(Conclusion::Success));
-        run.jobs = vec![make_job(
+        run.jobs = Some(vec![make_job(
             "build",
             RunStatus::Completed,
             Some(Conclusion::Success),
-        )];
-        run.jobs_fetched = true;
+        )]);
         let mut state = state_with_runs(vec![run]);
         state.expanded_runs.insert(1);
         state.expanded_jobs.insert((1, 1));
@@ -977,14 +987,14 @@ mod tests {
             Some(Conclusion::Success),
         )]);
         let result = state.expand_current();
-        assert_eq!(result, Some((0, true))); // needs_fetch because jobs_fetched is false
+        assert_eq!(result, Some((0, true))); // needs_fetch because jobs is None
         assert!(state.expanded_runs.contains(&1));
     }
 
     #[test]
     fn expand_already_fetched_returns_no_fetch() {
         let mut run = make_run(1, RunStatus::Completed, Some(Conclusion::Success));
-        run.jobs_fetched = true;
+        run.jobs = Some(vec![]); // fetched (empty)
         let mut state = state_with_runs(vec![run]);
         let result = state.expand_current();
         assert_eq!(result, Some((0, false))); // no fetch needed
@@ -1019,12 +1029,11 @@ mod tests {
     #[test]
     fn collapse_on_unexpanded_job_navigates_to_parent() {
         let mut run = make_run(1, RunStatus::Completed, Some(Conclusion::Success));
-        run.jobs = vec![make_job(
+        run.jobs = Some(vec![make_job(
             "build",
             RunStatus::Completed,
             Some(Conclusion::Success),
-        )];
-        run.jobs_fetched = true;
+        )]);
         let mut state = state_with_runs(vec![run]);
         state.expanded_runs.insert(1);
         state.rebuild_tree();
@@ -1049,12 +1058,11 @@ mod tests {
     #[test]
     fn collapse_run_cascades_to_child_jobs() {
         let mut run = make_run(1, RunStatus::Completed, Some(Conclusion::Success));
-        run.jobs = vec![make_job(
+        run.jobs = Some(vec![make_job(
             "build",
             RunStatus::Completed,
             Some(Conclusion::Success),
-        )];
-        run.jobs_fetched = true;
+        )]);
         let mut state = state_with_runs(vec![run]);
         state.expanded_runs.insert(1);
         state.expanded_jobs.insert((1, 1));
@@ -1163,12 +1171,11 @@ mod tests {
     #[test]
     fn quick_select_skips_non_run_items() {
         let mut run = make_run(1, RunStatus::Completed, Some(Conclusion::Success));
-        run.jobs = vec![make_job(
+        run.jobs = Some(vec![make_job(
             "build",
             RunStatus::Completed,
             Some(Conclusion::Success),
-        )];
-        run.jobs_fetched = true;
+        )]);
         let mut state = state_with_runs(vec![
             run,
             make_run(2, RunStatus::Completed, Some(Conclusion::Success)),
@@ -1243,12 +1250,11 @@ mod tests {
     #[test]
     fn resolve_item_job() {
         let mut run = make_run(1, RunStatus::Completed, Some(Conclusion::Success));
-        run.jobs = vec![make_job(
+        run.jobs = Some(vec![make_job(
             "build",
             RunStatus::Completed,
             Some(Conclusion::Success),
-        )];
-        run.jobs_fetched = true;
+        )]);
         let mut state = state_with_runs(vec![run]);
         state.expanded_runs.insert(1);
         state.rebuild_tree();
@@ -1262,12 +1268,11 @@ mod tests {
     #[test]
     fn resolve_item_step() {
         let mut run = make_run(1, RunStatus::Completed, Some(Conclusion::Success));
-        run.jobs = vec![make_job(
+        run.jobs = Some(vec![make_job(
             "build",
             RunStatus::Completed,
             Some(Conclusion::Success),
-        )];
-        run.jobs_fetched = true;
+        )]);
         let mut state = state_with_runs(vec![run]);
         state.expanded_runs.insert(1);
         state.expanded_jobs.insert((1, 1));
@@ -1369,12 +1374,11 @@ mod tests {
     #[test]
     fn current_item_is_failed_on_failed_job() {
         let mut run = make_run(1, RunStatus::Completed, Some(Conclusion::Failure));
-        run.jobs = vec![make_job(
+        run.jobs = Some(vec![make_job(
             "build",
             RunStatus::Completed,
             Some(Conclusion::Failure),
-        )];
-        run.jobs_fetched = true;
+        )]);
         let mut state = state_with_runs(vec![run]);
         state.expanded_runs.insert(1);
         state.rebuild_tree();
@@ -1403,8 +1407,7 @@ mod tests {
         let mut run = make_run(42, RunStatus::Completed, Some(Conclusion::Failure));
         let mut job = make_job("build", RunStatus::Completed, Some(Conclusion::Failure));
         job.database_id = Some(99);
-        run.jobs = vec![job];
-        run.jobs_fetched = true;
+        run.jobs = Some(vec![job]);
         let mut state = state_with_runs(vec![run]);
         state.expanded_runs.insert(42);
         state.rebuild_tree();

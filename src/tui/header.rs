@@ -56,7 +56,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &AppState) {
             Style::default().fg(Color::Yellow),
         ));
     } else if state.next_poll_in > 0 {
-        // Right-align the countdown
+        // Append countdown timer
         let countdown = format!(" {}s", state.next_poll_in);
         spans.push(Span::styled(
             countdown,

@@ -92,12 +92,23 @@ pub async fn fetch_jobs(repo: &str, run_id: u64) -> Result<String> {
     run_gh(&["run", "view", "--repo", repo, &run_id_str, "--json", "jobs"]).await
 }
 
+/// Opens a URL in the user's default browser.
+///
+/// Uses compile-time detection for Windows/macOS, then runtime detection for WSL2
+/// (which compiles as `target_os = "linux"` but needs `wslview` instead of `xdg-open`).
 pub fn open_in_browser(url: &str) -> Result<()> {
     use std::process::{Command, Stdio};
 
+    // Validate URL scheme to prevent opening arbitrary protocols or shell injection
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return Err(eyre!("Refusing to open non-HTTP URL: {url}"));
+    }
+
     if cfg!(target_os = "windows") {
+        // Empty "" title parameter prevents the URL from being interpreted as a window title
+        // and avoids shell metacharacter injection via cmd /C start
         return Command::new("cmd")
-            .args(["/C", "start", url])
+            .args(["/C", "start", "", url])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -135,7 +146,7 @@ pub fn open_in_browser(url: &str) -> Result<()> {
 
 pub async fn rerun_workflow(repo: &str, run_id: u64) -> Result<()> {
     let run_id_str = run_id.to_string();
-    run_gh(&["run", "rerun", "--repo", repo, &run_id_str]).await?;
+    run_gh(&["run", "rerun", "--failed", "--repo", repo, &run_id_str]).await?;
     Ok(())
 }
 
@@ -204,9 +215,10 @@ pub async fn copy_to_clipboard(text: &str) -> Result<()> {
 
         if let Ok(mut child) = child {
             if let Some(mut stdin) = child.stdin.take() {
-                stdin.write_all(text.as_bytes()).await.map_err(|e| {
-                    eyre!("Failed to write to clipboard: {e}")
-                })?;
+                stdin
+                    .write_all(text.as_bytes())
+                    .await
+                    .map_err(|e| eyre!("Failed to write to clipboard: {e}"))?;
                 drop(stdin);
             }
             let status = tokio::time::timeout(CLIPBOARD_TIMEOUT, child.wait())

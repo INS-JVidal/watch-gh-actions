@@ -37,11 +37,7 @@ fn gradient_color(line_idx: usize, total_lines: usize) -> Color {
     let (r, g, b) = if t <= 0.5 {
         // Red (255, 0, 0) → Magenta (220, 0, 155)
         let s = t * 2.0;
-        (
-            (255.0 + (220.0 - 255.0) * s) as u8,
-            0,
-            (155.0 * s) as u8,
-        )
+        ((255.0 + (220.0 - 255.0) * s) as u8, 0, (155.0 * s) as u8)
     } else {
         // Magenta (220, 0, 155) → Violet (136, 0, 255)
         let s = (t - 0.5) * 2.0;
@@ -76,7 +72,7 @@ pub struct StartupResult {
 }
 
 fn render_startup<B: Backend>(terminal: &mut Terminal<B>, phases: &[StartupPhase], frame: usize) {
-    let _ = terminal.draw(|f| {
+    if let Err(e) = terminal.draw(|f| {
         let area = f.area();
         let art_height = GHW_ART.len() as u16;
         let total_lines = art_height + 1 + phases.len() as u16;
@@ -105,12 +101,8 @@ fn render_startup<B: Backend>(terminal: &mut Terminal<B>, phases: &[StartupPhase
                     spinner::frame(frame).to_string(),
                     Style::default().fg(Color::Yellow),
                 ),
-                PhaseStatus::Done => {
-                    ("\u{2713}".to_string(), Style::default().fg(Color::Green))
-                }
-                PhaseStatus::Failed(_) => {
-                    ("\u{2717}".to_string(), Style::default().fg(Color::Red))
-                }
+                PhaseStatus::Done => ("\u{2713}".to_string(), Style::default().fg(Color::Green)),
+                PhaseStatus::Failed(_) => ("\u{2717}".to_string(), Style::default().fg(Color::Red)),
             };
 
             let mut spans = vec![
@@ -133,7 +125,9 @@ fn render_startup<B: Backend>(terminal: &mut Terminal<B>, phases: &[StartupPhase
 
         let paragraph = Paragraph::new(lines);
         f.render_widget(paragraph, vertical[1]);
-    });
+    }) {
+        tracing::warn!("startup render failed: {e}");
+    }
 }
 
 async fn run_phase<B, F, T>(
@@ -242,9 +236,10 @@ pub async fn run_startup<B: Backend>(
             render_startup(terminal, &phases, 0);
             Some(b)
         } else {
-            // Non-fatal: mark as done with no detail
+            // Non-fatal: mark as done but indicate it was skipped
             let idx = phases.len() - 1;
             phases[idx].status = PhaseStatus::Done;
+            phases[idx].detail = Some("(skipped)".to_string());
             render_startup(terminal, &phases, 0);
             None
         }

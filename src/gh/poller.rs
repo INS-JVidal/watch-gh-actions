@@ -110,11 +110,7 @@ impl Poller {
                 }
             },
             Err(e) => {
-                if self
-                    .tx
-                    .send(AppEvent::Error(format!("{e}")))
-                    .is_err()
-                {
+                if self.tx.send(AppEvent::Error(format!("{e}"))).is_err() {
                     return PollOutcome::ChannelClosed;
                 }
                 PollOutcome::Failure
@@ -133,13 +129,20 @@ pub async fn fetch_jobs_for_run(repo: &str, run_id: u64, tx: &mpsc::UnboundedSen
     match executor::fetch_jobs(repo, run_id).await {
         Ok(json) => match parser::parse_jobs(&json) {
             Ok(jobs) => {
-                let _ = tx.send(AppEvent::JobsResult { run_id, jobs });
+                if tx.send(AppEvent::JobsResult { run_id, jobs }).is_err() {
+                    tracing::warn!("fetch_jobs: channel closed");
+                }
             }
             Err(e) => {
-                let _ = tx.send(AppEvent::RunError {
-                    run_id,
-                    error: format!("Job parse error: {e}"),
-                });
+                if tx
+                    .send(AppEvent::RunError {
+                        run_id,
+                        error: format!("Job parse error: {e}"),
+                    })
+                    .is_err()
+                {
+                    tracing::warn!("fetch_jobs: channel closed");
+                }
             }
         },
         Err(first_err) => {
@@ -148,20 +151,32 @@ pub async fn fetch_jobs_for_run(repo: &str, run_id: u64, tx: &mpsc::UnboundedSen
             match executor::fetch_jobs(repo, run_id).await {
                 Ok(json) => match parser::parse_jobs(&json) {
                     Ok(jobs) => {
-                        let _ = tx.send(AppEvent::JobsResult { run_id, jobs });
+                        if tx.send(AppEvent::JobsResult { run_id, jobs }).is_err() {
+                            tracing::warn!("fetch_jobs: channel closed");
+                        }
                     }
                     Err(e) => {
-                        let _ = tx.send(AppEvent::RunError {
-                            run_id,
-                            error: format!("Job parse error: {e}"),
-                        });
+                        if tx
+                            .send(AppEvent::RunError {
+                                run_id,
+                                error: format!("Job parse error: {e}"),
+                            })
+                            .is_err()
+                        {
+                            tracing::warn!("fetch_jobs: channel closed");
+                        }
                     }
                 },
                 Err(retry_err) => {
-                    let _ = tx.send(AppEvent::RunError {
-                        run_id,
-                        error: format!("{first_err} (retry also failed: {retry_err})"),
-                    });
+                    if tx
+                        .send(AppEvent::RunError {
+                            run_id,
+                            error: format!("{first_err} (retry also failed: {retry_err})"),
+                        })
+                        .is_err()
+                    {
+                        tracing::warn!("fetch_jobs: channel closed");
+                    }
                 }
             }
         }

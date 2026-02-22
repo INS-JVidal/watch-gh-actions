@@ -29,7 +29,7 @@ pub struct Cli {
     #[arg(long)]
     pub no_notify: bool,
 
-    /// Enable verbose logging to ~/.local/state/ghw/debug.log
+    /// Enable verbose logging to $XDG_STATE_HOME/ghw/debug.log (fallback: ~/.local/state/ghw/)
     #[arg(long)]
     pub verbose: bool,
 }

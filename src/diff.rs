@@ -1,6 +1,7 @@
-use crate::app::{AppState, Notification, RunStatus, WorkflowRun};
+use crate::app::{AppState, Notification, RunStatus, SnapshotEntry, WorkflowRun};
 
 /// Maximum number of polls a run can be absent before being evicted from the snapshot.
+/// At the default 3s interval this is ~30s; with adaptive backoff (up to 30s) it's ~5 min.
 const SNAPSHOT_EVICTION_POLLS: u64 = 10;
 
 pub fn detect_changes(state: &mut AppState, new_runs: &[WorkflowRun]) {
@@ -9,9 +10,8 @@ pub fn detect_changes(state: &mut AppState, new_runs: &[WorkflowRun]) {
     let current_poll = state.poll_count;
 
     for run in new_runs {
-        if let Some(&(old_status, old_conclusion, _)) =
-            state.previous_snapshot.get(&run.database_id)
-        {
+        if let Some(entry) = state.previous_snapshot.get(&run.database_id) {
+            let (old_status, old_conclusion) = (entry.status, entry.conclusion);
             if old_status != run.status || old_conclusion != run.conclusion {
                 let msg = match (run.status, run.conclusion) {
                     (RunStatus::Completed, Some(crate::app::Conclusion::Success)) => {
@@ -39,16 +39,22 @@ pub fn detect_changes(state: &mut AppState, new_runs: &[WorkflowRun]) {
         }
     }
 
-    // Merge new runs into existing snapshot (instead of replacing)
+    // Merge new runs into existing snapshot — prevents false-positive notifications
+    // when runs scroll out of the `--limit` window and reappear later.
     for run in new_runs {
-        state
-            .previous_snapshot
-            .insert(run.database_id, (run.status, run.conclusion, current_poll));
+        state.previous_snapshot.insert(
+            run.database_id,
+            SnapshotEntry {
+                status: run.status,
+                conclusion: run.conclusion,
+                last_seen_poll: current_poll,
+            },
+        );
     }
 
     // Evict entries not seen in the last SNAPSHOT_EVICTION_POLLS polls
-    state.previous_snapshot.retain(|_, (_, _, last_seen)| {
-        current_poll.saturating_sub(*last_seen) < SNAPSHOT_EVICTION_POLLS
+    state.previous_snapshot.retain(|_, entry| {
+        current_poll.saturating_sub(entry.last_seen_poll) < SNAPSHOT_EVICTION_POLLS
     });
 }
 
@@ -71,8 +77,7 @@ mod tests {
             event: "push".to_string(),
             number: id,
             url: format!("https://github.com/test/repo/actions/runs/{}", id),
-            jobs: Vec::new(),
-            jobs_fetched: false,
+            jobs: None,
         }
     }
 
@@ -203,7 +208,7 @@ mod tests {
         let runs1 = vec![make_run(1, RunStatus::InProgress, None)];
         detect_changes(&mut state, &runs1);
         assert!(state.previous_snapshot.contains_key(&1));
-        assert_eq!(state.previous_snapshot[&1].0, RunStatus::InProgress);
+        assert_eq!(state.previous_snapshot[&1].status, RunStatus::InProgress);
     }
 
     #[test]

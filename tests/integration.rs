@@ -113,8 +113,7 @@ fn full_flow_with_jobs_expansion() {
     let jobs = parser::parse_jobs(jobs_json).unwrap();
 
     // Attach jobs to run
-    runs[0].jobs = jobs;
-    runs[0].jobs_fetched = true;
+    runs[0].jobs = Some(jobs);
 
     // Build state and expand
     let mut state = make_state_with_runs(runs);
@@ -236,8 +235,7 @@ fn log_overlay_lifecycle() {
             completed_at: None,
         }],
     };
-    run.jobs = vec![job];
-    run.jobs_fetched = true;
+    run.jobs = Some(vec![job]);
 
     let mut state = make_state_with_runs(vec![run]);
 
@@ -272,7 +270,10 @@ fn log_overlay_lifecycle() {
 
     // Overlay mode: 'e' closes
     state.open_log_overlay("test".to_string(), "log", 1, Some(10));
-    let log_ctx = InputContext { overlay: OverlayMode::Log, ..Default::default() };
+    let log_ctx = InputContext {
+        overlay: OverlayMode::Log,
+        ..Default::default()
+    };
     let action = input::map_key(press(KeyCode::Char('e')), &log_ctx);
     assert_eq!(action, Action::CloseOverlay);
 }

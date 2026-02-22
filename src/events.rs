@@ -25,7 +25,7 @@ pub enum AppEvent {
         title: String,
         content: String,
     },
-    ClipboardResult(bool),
+    ClipboardResult(Result<(), String>),
     RerunSuccess(u64),
     RunError {
         run_id: u64,
@@ -73,8 +73,7 @@ impl EventHandler {
                         // EINTR — retry silently
                     }
                     Err(e) => {
-                        let _ = eventtx
-                            .send(AppEvent::Error(format!("Terminal read error: {e}")));
+                        let _ = eventtx.send(AppEvent::Error(format!("Terminal read error: {e}")));
                         break;
                     }
                     _ => {} // Non-key events (mouse, resize, etc.)
@@ -101,13 +100,25 @@ impl EventHandler {
     pub fn stop(&mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
         if let Some(handle) = self.thread.take() {
-            let _ = handle.join();
+            if let Err(panic_payload) = handle.join() {
+                let msg = panic_payload.downcast::<String>().map_or_else(
+                    |p| {
+                        p.downcast::<&str>()
+                            .map_or_else(|_| "unknown panic".to_string(), |s| s.to_string())
+                    },
+                    |s| *s,
+                );
+                tracing::error!("event thread panicked: {msg}");
+            }
         }
     }
 }
 
 impl Drop for EventHandler {
     fn drop(&mut self) {
-        self.stop();
+        // Only signal shutdown; don't join the thread in Drop to avoid deadlocking
+        // if crossterm::event::poll is blocking (e.g. during panic unwinding).
+        // The thread will exit on its next poll tick when it checks the shutdown flag.
+        self.shutdown.store(true, Ordering::Relaxed);
     }
 }

@@ -18,6 +18,7 @@ use gh::poller::{self, Poller};
 use input::{Action, InputContext, OverlayMode};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use std::future::Future;
 use std::io;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
@@ -56,6 +57,36 @@ fn dirs_next_or_fallback() -> std::path::PathBuf {
     }
 }
 
+fn spawn_monitored(
+    tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    label: &'static str,
+    fut: impl Future<Output = ()> + Send + 'static,
+) {
+    tokio::spawn(async move {
+        let handle = tokio::spawn(fut);
+        if let Err(join_err) = handle.await {
+            let msg = if join_err.is_panic() {
+                match join_err.into_panic().downcast::<String>() {
+                    Ok(s) => *s,
+                    Err(payload) => match payload.downcast::<&str>() {
+                        Ok(s) => s.to_string(),
+                        Err(_) => "unknown panic".to_string(),
+                    },
+                }
+            } else {
+                "task cancelled".to_string()
+            };
+            tracing::error!("{label} panicked: {msg}");
+            if tx
+                .send(AppEvent::Error(format!("{label} crashed: {msg}")))
+                .is_err()
+            {
+                tracing::warn!("{label}: channel closed while reporting panic");
+            }
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     color_eyre::install()?;
@@ -69,8 +100,12 @@ async fn main() -> Result<()> {
     // Setup terminal with panic hook early, before any data fetching
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
-        let _ = terminal::disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen, SetTitle(""));
+        if let Err(e) = terminal::disable_raw_mode() {
+            eprintln!("Failed to disable raw mode during panic: {e}");
+        }
+        if let Err(e) = execute!(io::stdout(), LeaveAlternateScreen, SetTitle("")) {
+            eprintln!("Failed to leave alternate screen during panic: {e}");
+        }
         original_hook(panic_info);
     }));
 
@@ -117,7 +152,7 @@ async fn main() -> Result<()> {
     let poller_repo = repo.clone();
     let poller_workflow = args.workflow.clone();
     let poller_limit = args.limit;
-    tokio::spawn(async move {
+    let poller_handle = tokio::spawn(async move {
         let poller = Poller::new(
             poller_repo,
             poller_limit,
@@ -128,7 +163,16 @@ async fn main() -> Result<()> {
         poller.run().await;
     });
 
-    let result = run_app(&mut terminal, &mut state, events, &tx, &repo, &interval_tx).await;
+    let result = run_app(
+        &mut terminal,
+        &mut state,
+        events,
+        &tx,
+        &repo,
+        &interval_tx,
+        poller_handle,
+    )
+    .await;
 
     // Restore terminal
     terminal::disable_raw_mode()?;
@@ -139,11 +183,15 @@ async fn main() -> Result<()> {
 }
 
 /// Visible height of the log overlay area (80% of terminal height minus borders).
+/// Must stay in sync with the sizing logic in `tui::log_overlay::render`.
 fn log_overlay_height(terminal: &Terminal<CrosstermBackend<io::Stdout>>) -> usize {
     terminal
         .size()
         .map(|s| s.height as usize * 8 / 10)
-        .unwrap_or(20)
+        .unwrap_or_else(|e| {
+            tracing::warn!("terminal size query failed: {e}");
+            20
+        })
         .saturating_sub(2)
 }
 
@@ -154,6 +202,7 @@ async fn run_app(
     tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
     repo: &str,
     interval_tx: &watch::Sender<u64>,
+    poller_handle: tokio::task::JoinHandle<()>,
 ) -> Result<()> {
     let mut last_tick = Instant::now();
     let mut poll_start = Instant::now();
@@ -198,7 +247,7 @@ async fn run_app(
                                         let run_id = run.database_id;
                                         let tx2 = tx.clone();
                                         let repo2 = repo.to_string();
-                                        tokio::spawn(async move {
+                                        spawn_monitored(tx.clone(), "expand_jobs", async move {
                                             poller::fetch_jobs_for_run(&repo2, run_id, &tx2).await;
                                         });
                                     }
@@ -213,19 +262,28 @@ async fn run_app(
                             let repo2 = repo.to_string();
                             let limit = state.config.limit;
                             let wf = state.config.workflow_filter.clone();
-                            tokio::spawn(async move {
+                            spawn_monitored(tx.clone(), "refresh", async move {
                                 match gh::executor::fetch_runs(&repo2, limit, wf.as_deref()).await {
                                     Ok(json) => match gh::parser::parse_runs(&json) {
                                         Ok(runs) => {
-                                            let _ = tx2
-                                                .send(AppEvent::PollResult { runs, manual: true });
+                                            if tx2
+                                                .send(AppEvent::PollResult { runs, manual: true })
+                                                .is_err()
+                                            {
+                                                tracing::warn!("refresh: channel closed");
+                                            }
                                         }
                                         Err(e) => {
-                                            let _ = tx2.send(AppEvent::Error(format!("{}", e)));
+                                            if tx2.send(AppEvent::Error(format!("{}", e))).is_err()
+                                            {
+                                                tracing::warn!("refresh: channel closed");
+                                            }
                                         }
                                     },
                                     Err(e) => {
-                                        let _ = tx2.send(AppEvent::Error(format!("{}", e)));
+                                        if tx2.send(AppEvent::Error(format!("{}", e))).is_err() {
+                                            tracing::warn!("refresh: channel closed");
+                                        }
                                     }
                                 }
                             });
@@ -249,13 +307,21 @@ async fn run_app(
                                 } else {
                                     let repo2 = repo.to_string();
                                     let tx2 = tx.clone();
-                                    tokio::spawn(async move {
+                                    spawn_monitored(tx.clone(), "rerun", async move {
                                         match gh::executor::rerun_workflow(&repo2, run_id).await {
                                             Ok(()) => {
-                                                let _ = tx2.send(AppEvent::RerunSuccess(run_id));
+                                                if tx2.send(AppEvent::RerunSuccess(run_id)).is_err()
+                                                {
+                                                    tracing::warn!("rerun: channel closed");
+                                                }
                                             }
                                             Err(e) => {
-                                                let _ = tx2.send(AppEvent::Error(format!("{}", e)));
+                                                if tx2
+                                                    .send(AppEvent::Error(format!("{}", e)))
+                                                    .is_err()
+                                                {
+                                                    tracing::warn!("rerun: channel closed");
+                                                }
                                             }
                                         }
                                     });
@@ -327,9 +393,13 @@ async fn run_app(
                         Action::CopyToClipboard => {
                             if let Some(text) = state.log_overlay_text() {
                                 let tx2 = tx.clone();
-                                tokio::spawn(async move {
-                                    let ok = gh::executor::copy_to_clipboard(&text).await.is_ok();
-                                    let _ = tx2.send(AppEvent::ClipboardResult(ok));
+                                spawn_monitored(tx.clone(), "clipboard", async move {
+                                    let result = gh::executor::copy_to_clipboard(&text)
+                                        .await
+                                        .map_err(|e| format!("{e}"));
+                                    if tx2.send(AppEvent::ClipboardResult(result)).is_err() {
+                                        tracing::warn!("clipboard: channel closed");
+                                    }
                                 });
                             }
                         }
@@ -356,6 +426,12 @@ async fn run_app(
                         state.advance_spinner();
                         last_tick = Instant::now();
                     }
+                    // Check if the poller task has died unexpectedly
+                    if poller_handle.is_finished() {
+                        state.set_error(
+                            "Poller stopped unexpectedly. Press r to refresh manually.".to_string(),
+                        );
+                    }
                     // Adaptive polling: adjust interval and notify poller
                     let new_interval = if state.has_active_runs() {
                         app::POLL_INTERVAL_ACTIVE
@@ -369,7 +445,9 @@ async fn run_app(
                     };
                     if new_interval != state.poll_interval {
                         state.poll_interval = new_interval;
-                        let _ = interval_tx.send(new_interval);
+                        if interval_tx.send(new_interval).is_err() {
+                            tracing::warn!("interval: poller channel closed");
+                        }
                     }
                 }
                 AppEvent::PollResult {
@@ -393,13 +471,45 @@ async fn run_app(
                     if let Some(old_snapshot) = old_snapshot {
                         for run in &new_runs {
                             if run.status == app::RunStatus::Completed {
-                                if let Some(&(old_status, _, _)) =
-                                    old_snapshot.get(&run.database_id)
-                                {
-                                    if old_status != app::RunStatus::Completed {
+                                if let Some(entry) = old_snapshot.get(&run.database_id) {
+                                    if entry.status != app::RunStatus::Completed {
                                         let run_clone = run.clone();
+                                        let tx2 = tx.clone();
                                         tokio::task::spawn_blocking(move || {
-                                            notify::send_desktop(&run_clone);
+                                            let result = std::panic::catch_unwind(
+                                                std::panic::AssertUnwindSafe(|| {
+                                                    notify::send_desktop(&run_clone)
+                                                }),
+                                            );
+                                            match result {
+                                                Ok(Some(err)) => {
+                                                    if tx2.send(AppEvent::Error(err)).is_err() {
+                                                        tracing::warn!("notify: channel closed");
+                                                    }
+                                                }
+                                                Err(panic_payload) => {
+                                                    let msg = panic_payload
+                                                        .downcast::<String>()
+                                                        .map(|s| *s)
+                                                        .unwrap_or_else(|p| {
+                                                            p.downcast::<&str>()
+                                                                .map(|s| s.to_string())
+                                                                .unwrap_or_else(|_| {
+                                                                    "unknown panic".to_string()
+                                                                })
+                                                        });
+                                                    tracing::error!("notify panicked: {msg}");
+                                                    if tx2
+                                                        .send(AppEvent::Error(format!(
+                                                            "Notification crashed: {msg}"
+                                                        )))
+                                                        .is_err()
+                                                    {
+                                                        tracing::warn!("notify: channel closed");
+                                                    }
+                                                }
+                                                Ok(None) => {} // success
+                                            }
                                         });
                                     }
                                 }
@@ -414,10 +524,9 @@ async fn run_app(
                         if let Some(old) =
                             state.runs.iter().find(|r| r.database_id == run.database_id)
                         {
-                            if old.jobs_fetched {
+                            if old.jobs.is_some() {
                                 if old.updated_at == run.updated_at {
                                     run.jobs = old.jobs.clone();
-                                    run.jobs_fetched = true;
                                 } else if state.expanded_runs.contains(&run.database_id) {
                                     // Run changed and is expanded — re-fetch jobs
                                     refetch_run_ids.push(run.database_id);
@@ -450,7 +559,7 @@ async fn run_app(
                     for run_id in refetch_run_ids {
                         let tx2 = tx.clone();
                         let repo2 = repo.to_string();
-                        tokio::spawn(async move {
+                        spawn_monitored(tx.clone(), "refetch_jobs", async move {
                             poller::fetch_jobs_for_run(&repo2, run_id, &tx2).await;
                         });
                     }
@@ -458,8 +567,7 @@ async fn run_app(
                 AppEvent::JobsResult { run_id, jobs } => {
                     // Find run by ID (index may have changed)
                     if let Some(run) = state.runs.iter_mut().find(|r| r.database_id == run_id) {
-                        run.jobs = jobs;
-                        run.jobs_fetched = true;
+                        run.jobs = Some(jobs);
                     }
                     state.rebuild_tree();
                 }
@@ -469,23 +577,23 @@ async fn run_app(
                     title,
                     content,
                 } => {
-                    // Cache the result
+                    state.open_log_overlay(title, &content, run_id, job_id);
                     state.log_cache.insert(
                         (run_id, job_id),
                         app::FailedLog {
-                            content: content.clone(),
+                            content,
                             fetched_at: Instant::now(),
                         },
                     );
-                    state.open_log_overlay(title, &content, run_id, job_id);
                 }
-                AppEvent::ClipboardResult(ok) => {
-                    if ok {
+                AppEvent::ClipboardResult(result) => match result {
+                    Ok(()) => {
                         state.add_notification(0, "Copied to clipboard".to_string());
-                    } else {
-                        state.set_error("Failed to copy to clipboard".to_string());
                     }
-                }
+                    Err(e) => {
+                        state.set_error(e);
+                    }
+                },
                 AppEvent::RerunSuccess(run_id) => {
                     state.log_cache.retain(|(r, _), _| *r != run_id);
                     state.add_notification(run_id, "Rerun triggered".to_string());
@@ -513,7 +621,7 @@ fn build_log_title(state: &AppState, run_id: u64, job_id: Option<u64>) -> String
 
     if let Some(jid) = job_id {
         let job_name = run
-            .and_then(|r| r.jobs.iter().find(|j| j.database_id == Some(jid)))
+            .and_then(|r| r.jobs.as_ref()?.iter().find(|j| j.database_id == Some(jid)))
             .map_or("Unknown job", |j| j.name.as_str());
         format!("{run_name} > {job_name}")
     } else {
@@ -530,7 +638,12 @@ fn build_detail_lines(
         app::ResolvedItem::Run(run) => {
             let title = format!("Run #{}", run.number);
             let conclusion_str = run.conclusion.map_or("-".into(), |c| format!("{c:?}"));
-            let duration = app::compute_duration(Some(run.created_at), None);
+            let end = if run.status == app::RunStatus::Completed {
+                Some(run.updated_at)
+            } else {
+                None
+            };
+            let duration = app::compute_duration(Some(run.created_at), end);
             let lines = vec![
                 ("Title".into(), run.display_title.clone()),
                 ("Workflow".into(), run.name.clone()),
@@ -634,8 +747,8 @@ fn fetch_logs_async(
 ) {
     let repo = repo.to_string();
     let title = title.to_string();
-    let tx = tx.clone();
-    tokio::spawn(async move {
+    let tx2 = tx.clone();
+    spawn_monitored(tx.clone(), "fetch_logs", async move {
         let result = if let Some(jid) = job_id {
             gh::executor::fetch_failed_logs_for_job(&repo, run_id, jid).await
         } else {
@@ -650,15 +763,22 @@ fn fetch_logs_async(
                 } else {
                     content
                 };
-                let _ = tx.send(AppEvent::FailedLogResult {
-                    run_id,
-                    job_id,
-                    title,
-                    content,
-                });
+                if tx2
+                    .send(AppEvent::FailedLogResult {
+                        run_id,
+                        job_id,
+                        title,
+                        content,
+                    })
+                    .is_err()
+                {
+                    tracing::warn!("fetch_logs: channel closed");
+                }
             }
             Err(e) => {
-                let _ = tx.send(AppEvent::Error(format!("{}", e)));
+                if tx2.send(AppEvent::Error(format!("{}", e))).is_err() {
+                    tracing::warn!("fetch_logs: channel closed");
+                }
             }
         }
     });

@@ -20,8 +20,7 @@ pub fn run_with_id(id: u64) -> WorkflowRun {
         event: "push".to_string(),
         number: id,
         url: format!("https://github.com/test/repo/actions/runs/{}", id),
-        jobs: Vec::new(),
-        jobs_fetched: false,
+        jobs: None,
     }
 }
 

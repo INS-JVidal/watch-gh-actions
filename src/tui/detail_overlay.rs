@@ -62,4 +62,3 @@ pub fn render(f: &mut Frame, overlay: &DetailOverlay) {
     let paragraph = Paragraph::new(lines).block(block);
     f.render_widget(paragraph, overlay_area);
 }
-

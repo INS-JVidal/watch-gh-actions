@@ -98,9 +98,10 @@ pub fn render(f: &mut Frame, area: Rect, state: &AppState) {
 fn status_icon(status: RunStatus, conclusion: Option<Conclusion>) -> (&'static str, Color) {
     match (status, conclusion) {
         (RunStatus::Completed, Some(Conclusion::Success)) => ("✓", Color::Green),
-        (RunStatus::Completed, Some(Conclusion::Failure | Conclusion::TimedOut | Conclusion::StartupFailure)) => {
-            ("✗", Color::Red)
-        }
+        (
+            RunStatus::Completed,
+            Some(Conclusion::Failure | Conclusion::TimedOut | Conclusion::StartupFailure),
+        ) => ("✗", Color::Red),
         (RunStatus::Completed, Some(Conclusion::ActionRequired)) => ("!", Color::Yellow),
         (RunStatus::Completed, Some(Conclusion::Cancelled)) => ("⊘", Color::Yellow),
         (RunStatus::Completed, Some(Conclusion::Skipped)) => ("⊘", Color::DarkGray),
@@ -140,7 +141,12 @@ fn render_run_line(
     let arrow = if expanded { "▼" } else { "▶" };
 
     let number = format!("#{}", run.number);
-    let duration = app::compute_duration(Some(run.created_at), None);
+    let end = if run.status == RunStatus::Completed {
+        Some(run.updated_at)
+    } else {
+        None
+    };
+    let duration = app::compute_duration(Some(run.created_at), end);
 
     let icon_display_width = UnicodeWidthStr::width(icon);
     let arrow_display_width = UnicodeWidthStr::width(arrow);
