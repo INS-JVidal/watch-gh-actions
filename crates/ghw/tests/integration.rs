@@ -1,10 +1,11 @@
 mod fixtures;
 
+use ciw_core::app::{AppState, Conclusion, FilterMode, ResolvedItem, RunStatus, TreeLevel};
+use ciw_core::diff;
+use ciw_core::input::{self, Action, InputContext, OverlayMode};
+use ciw_core::traits::CiParser;
 use fixtures::*;
-use ghw::app::{AppState, Conclusion, FilterMode, ResolvedItem, RunStatus, TreeLevel};
-use ghw::diff;
-use ghw::gh::parser;
-use ghw::input::{self, Action, InputContext, OverlayMode};
+use ghw::parser::GhParser;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
@@ -15,6 +16,10 @@ fn press(code: KeyCode) -> KeyEvent {
         kind: KeyEventKind::Press,
         state: KeyEventState::NONE,
     }
+}
+
+fn parser() -> GhParser {
+    GhParser
 }
 
 // ========== Data flow tests (always run) ==========
@@ -52,7 +57,8 @@ fn full_flow_json_to_parse_to_state_to_tree_to_resolve() {
     ]"#;
 
     // Step 2: Parse
-    let runs = parser::parse_runs(json).expect("parse should succeed");
+    let p = parser();
+    let runs = p.parse_runs(json).expect("parse should succeed");
     assert_eq!(runs.len(), 2);
 
     // Step 3: Build AppState
@@ -93,7 +99,8 @@ fn full_flow_with_jobs_expansion() {
         "number": 60,
         "url": "https://github.com/test/repo/actions/runs/200"
     }]"#;
-    let mut runs = parser::parse_runs(runs_json).unwrap();
+    let p = parser();
+    let mut runs = p.parse_runs(runs_json).unwrap();
 
     // Parse jobs (simulating a separate fetch)
     let jobs_json = r#"{"jobs":[{
@@ -110,7 +117,7 @@ fn full_flow_with_jobs_expansion() {
             {"name": "Test", "status": "completed", "conclusion": "failure", "number": 3}
         ]
     }]}"#;
-    let jobs = parser::parse_jobs(jobs_json).unwrap();
+    let jobs = p.parse_jobs(jobs_json).unwrap();
 
     // Attach jobs to run
     runs[0].jobs = Some(jobs);
@@ -214,7 +221,7 @@ fn input_to_state_action_flow() {
 
 #[test]
 fn log_overlay_lifecycle() {
-    use ghw::app::{Conclusion, Job, RunStatus, Step};
+    use ciw_core::app::{Conclusion, Job, RunStatus, Step};
 
     // Create a failed run with a failed job
     let mut run = run_failed(1);
@@ -295,7 +302,7 @@ fn cancel_delete_key_mapping_flow() {
 
 #[test]
 fn confirm_overlay_lifecycle() {
-    use ghw::app::ConfirmAction;
+    use ciw_core::app::ConfirmAction;
 
     let mut state = make_state_with_runs(vec![run_in_progress(1)]);
 
@@ -324,7 +331,7 @@ fn confirm_overlay_lifecycle() {
 
 #[test]
 fn confirm_overlay_dismiss() {
-    use ghw::app::ConfirmAction;
+    use ciw_core::app::ConfirmAction;
 
     let mut state = make_state_with_runs(vec![run_with_id(1)]);
 
@@ -400,7 +407,7 @@ fn tui_header_contains_repo_name() {
 
     terminal
         .draw(|f| {
-            ghw::tui::render::render(f, &state);
+            ciw_core::tui::render::render(f, &state);
         })
         .unwrap();
 
@@ -425,7 +432,7 @@ fn tui_footer_contains_key_hints() {
 
     terminal
         .draw(|f| {
-            ghw::tui::render::render(f, &state);
+            ciw_core::tui::render::render(f, &state);
         })
         .unwrap();
 
@@ -452,7 +459,7 @@ fn tui_tree_renders_run_titles() {
 
     terminal
         .draw(|f| {
-            ghw::tui::render::render(f, &state);
+            ciw_core::tui::render::render(f, &state);
         })
         .unwrap();
 
@@ -486,7 +493,7 @@ fn tui_empty_state_shows_no_runs_message() {
 
     terminal
         .draw(|f| {
-            ghw::tui::render::render(f, &state);
+            ciw_core::tui::render::render(f, &state);
         })
         .unwrap();
 
@@ -508,7 +515,10 @@ fn tui_empty_state_shows_no_runs_message() {
 #[tokio::test]
 #[ignore]
 async fn gh_check_available() {
-    ghw::gh::executor::check_gh_available()
+    use ciw_core::traits::CiExecutor;
+    let executor = ghw::executor::GhExecutor::new(String::new());
+    executor
+        .check_available()
         .await
         .expect("gh CLI should be authenticated");
 }
@@ -516,10 +526,14 @@ async fn gh_check_available() {
 #[tokio::test]
 #[ignore]
 async fn gh_fetch_runs_from_public_repo() {
-    let json = ghw::gh::executor::fetch_runs("cli/cli", 5, None)
+    use ciw_core::traits::CiExecutor;
+    let executor = ghw::executor::GhExecutor::new("cli/cli".to_string());
+    let p = parser();
+    let json = executor
+        .fetch_runs(5, None)
         .await
         .expect("should fetch runs from cli/cli");
-    let runs = parser::parse_runs(&json).expect("should parse runs");
+    let runs = p.parse_runs(&json).expect("should parse runs");
     assert!(!runs.is_empty(), "cli/cli should have runs");
     // Verify fields are populated
     let run = &runs[0];
@@ -532,29 +546,34 @@ async fn gh_fetch_runs_from_public_repo() {
 #[tokio::test]
 #[ignore]
 async fn gh_fetch_jobs_from_public_repo() {
-    let json = ghw::gh::executor::fetch_runs("cli/cli", 1, None)
+    use ciw_core::traits::CiExecutor;
+    let executor = ghw::executor::GhExecutor::new("cli/cli".to_string());
+    let p = parser();
+    let json = executor
+        .fetch_runs(1, None)
         .await
         .expect("should fetch runs");
-    let runs = parser::parse_runs(&json).expect("should parse");
+    let runs = p.parse_runs(&json).expect("should parse");
     assert!(!runs.is_empty());
 
     let run_id = runs[0].database_id;
-    let jobs_json = ghw::gh::executor::fetch_jobs("cli/cli", run_id)
+    let jobs_json = executor
+        .fetch_jobs(run_id)
         .await
         .expect("should fetch jobs");
-    let jobs = parser::parse_jobs(&jobs_json).expect("should parse jobs");
+    let jobs = p.parse_jobs(&jobs_json).expect("should parse jobs");
     // Jobs may be empty for some run types, but parsing should succeed
-    // Parsing succeeded - jobs may be empty for some run types
     let _ = jobs;
 }
 
 #[tokio::test]
 #[ignore]
 async fn gh_full_pipeline_fetch_parse_state() {
-    let json = ghw::gh::executor::fetch_runs("cli/cli", 5, None)
-        .await
-        .expect("fetch runs");
-    let runs = parser::parse_runs(&json).expect("parse runs");
+    use ciw_core::traits::CiExecutor;
+    let executor = ghw::executor::GhExecutor::new("cli/cli".to_string());
+    let p = parser();
+    let json = executor.fetch_runs(5, None).await.expect("fetch runs");
+    let runs = p.parse_runs(&json).expect("parse runs");
 
     let mut state = AppState::new("cli/cli".to_string(), None, 5, None);
     state.runs = runs;

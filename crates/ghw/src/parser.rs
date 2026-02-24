@@ -1,4 +1,5 @@
-use crate::app::{Job, WorkflowRun};
+use ciw_core::app::{Job, WorkflowRun};
+use ciw_core::traits::CiParser;
 use color_eyre::eyre::{eyre, Result};
 
 const MAX_RESPONSE_SIZE: usize = 10 * 1024 * 1024; // 10 MB
@@ -14,10 +15,30 @@ fn check_response_size(json: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn parse_runs(json: &str) -> Result<Vec<WorkflowRun>> {
-    check_response_size(json)?;
-    let runs: Vec<WorkflowRun> = serde_json::from_str(json)?;
-    Ok(runs)
+pub struct GhParser;
+
+impl CiParser for GhParser {
+    fn parse_runs(&self, json: &str) -> Result<Vec<WorkflowRun>> {
+        check_response_size(json)?;
+        let runs: Vec<WorkflowRun> = serde_json::from_str(json)?;
+        Ok(runs)
+    }
+
+    fn parse_jobs(&self, json: &str) -> Result<Vec<Job>> {
+        check_response_size(json)?;
+        let resp: JobsResponse = serde_json::from_str(json)?;
+        Ok(resp.jobs)
+    }
+
+    fn process_log_output(&self, raw: &str, max_lines: usize) -> (String, bool) {
+        let lines: Vec<&str> = raw.lines().collect();
+        if lines.len() > max_lines {
+            let truncated = &lines[lines.len() - max_lines..];
+            (truncated.join("\n"), true)
+        } else {
+            (raw.to_string(), false)
+        }
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -25,28 +46,14 @@ struct JobsResponse {
     jobs: Vec<Job>,
 }
 
-pub fn parse_jobs(json: &str) -> Result<Vec<Job>> {
-    check_response_size(json)?;
-    let resp: JobsResponse = serde_json::from_str(json)?;
-    Ok(resp.jobs)
-}
-
-/// Takes the last `max_lines` lines from raw log output.
-/// Returns `(text, was_truncated)`.
-pub fn process_log_output(raw: &str, max_lines: usize) -> (String, bool) {
-    let lines: Vec<&str> = raw.lines().collect();
-    if lines.len() > max_lines {
-        let truncated = &lines[lines.len() - max_lines..];
-        (truncated.join("\n"), true)
-    } else {
-        (raw.to_string(), false)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{Conclusion, RunStatus};
+    use ciw_core::app::{Conclusion, RunStatus};
+
+    fn parser() -> GhParser {
+        GhParser
+    }
 
     const SINGLE_RUN_JSON: &str = r#"[
         {
@@ -66,7 +73,8 @@ mod tests {
 
     #[test]
     fn parse_single_completed_run() {
-        let runs = parse_runs(SINGLE_RUN_JSON).unwrap();
+        let p = parser();
+        let runs = p.parse_runs(SINGLE_RUN_JSON).unwrap();
         assert_eq!(runs.len(), 1);
         let run = &runs[0];
         assert_eq!(run.database_id, 123);
@@ -88,13 +96,15 @@ mod tests {
             "createdAt": "2024-01-01T00:00:00Z", "updatedAt": "2024-01-01T00:00:00Z",
             "event": "push", "number": 1, "url": "https://example.com"
         }]"#;
-        let runs = parse_runs(json).unwrap();
+        let p = parser();
+        let runs = p.parse_runs(json).unwrap();
         assert_eq!(runs[0].status, RunStatus::InProgress);
         assert_eq!(runs[0].conclusion, None);
     }
 
     #[test]
     fn parse_all_status_strings() {
+        let p = parser();
         let statuses = [
             ("completed", RunStatus::Completed),
             ("in_progress", RunStatus::InProgress),
@@ -111,7 +121,7 @@ mod tests {
                 "event":"push","number":1,"url":"u"}}]"#,
                 s
             );
-            let runs = parse_runs(&json).unwrap();
+            let runs = p.parse_runs(&json).unwrap();
             assert_eq!(runs[0].status, *expected, "status string: {}", s);
         }
     }
@@ -122,12 +132,14 @@ mod tests {
             "status":"something_new","conclusion":null,
             "createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z",
             "event":"push","number":1,"url":"u"}]"#;
-        let runs = parse_runs(json).unwrap();
+        let p = parser();
+        let runs = p.parse_runs(json).unwrap();
         assert_eq!(runs[0].status, RunStatus::Unknown);
     }
 
     #[test]
     fn parse_all_conclusion_strings() {
+        let p = parser();
         let conclusions = [
             ("success", Conclusion::Success),
             ("failure", Conclusion::Failure),
@@ -147,7 +159,7 @@ mod tests {
                 "event":"push","number":1,"url":"u"}}]"#,
                 s
             );
-            let runs = parse_runs(&json).unwrap();
+            let runs = p.parse_runs(&json).unwrap();
             assert_eq!(
                 runs[0].conclusion,
                 Some(*expected),
@@ -163,13 +175,15 @@ mod tests {
             "status":"completed","conclusion":"brand_new_thing",
             "createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z",
             "event":"push","number":1,"url":"u"}]"#;
-        let runs = parse_runs(json).unwrap();
+        let p = parser();
+        let runs = p.parse_runs(json).unwrap();
         assert_eq!(runs[0].conclusion, Some(Conclusion::Unknown));
     }
 
     #[test]
     fn parse_empty_array() {
-        let runs = parse_runs("[]").unwrap();
+        let p = parser();
+        let runs = p.parse_runs("[]").unwrap();
         assert!(runs.is_empty());
     }
 
@@ -185,7 +199,8 @@ mod tests {
              "createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z",
              "event":"push","number":2,"url":"u2"}
         ]"#;
-        let runs = parse_runs(json).unwrap();
+        let p = parser();
+        let runs = p.parse_runs(json).unwrap();
         assert_eq!(runs.len(), 2);
         assert_eq!(runs[0].display_title, "A");
         assert_eq!(runs[1].display_title, "B");
@@ -193,13 +208,15 @@ mod tests {
 
     #[test]
     fn parse_invalid_json_error() {
-        assert!(parse_runs("not json").is_err());
+        let p = parser();
+        assert!(p.parse_runs("not json").is_err());
     }
 
     #[test]
     fn parse_missing_fields_error() {
         let json = r#"[{"databaseId": 1}]"#;
-        assert!(parse_runs(json).is_err());
+        let p = parser();
+        assert!(p.parse_runs(json).is_err());
     }
 
     #[test]
@@ -208,7 +225,8 @@ mod tests {
             "status":"completed","conclusion":"success",
             "createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z",
             "event":"push","number":1,"url":"u"}]"#;
-        let runs = parse_runs(json).unwrap();
+        let p = parser();
+        let runs = p.parse_runs(json).unwrap();
         assert_eq!(runs[0].display_title, "构建 🚀 テスト");
     }
 
@@ -228,7 +246,8 @@ mod tests {
                 ]
             }
         ]}"#;
-        let jobs = parse_jobs(json).unwrap();
+        let p = parser();
+        let jobs = p.parse_jobs(json).unwrap();
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].name, "build");
         assert_eq!(jobs[0].conclusion, Some(Conclusion::Success));
@@ -240,7 +259,8 @@ mod tests {
     #[test]
     fn parse_jobs_empty() {
         let json = r#"{"jobs":[]}"#;
-        let jobs = parse_jobs(json).unwrap();
+        let p = parser();
+        let jobs = p.parse_jobs(json).unwrap();
         assert!(jobs.is_empty());
     }
 
@@ -257,7 +277,8 @@ mod tests {
                 "completedAt": "2024-01-01T00:01:30Z"
             }]
         }]}"#;
-        let jobs = parse_jobs(json).unwrap();
+        let p = parser();
+        let jobs = p.parse_jobs(json).unwrap();
         assert!(jobs[0].steps[0].started_at.is_some());
         assert!(jobs[0].steps[0].completed_at.is_some());
     }
@@ -273,7 +294,8 @@ mod tests {
                 "number": 1
             }]
         }]}"#;
-        let jobs = parse_jobs(json).unwrap();
+        let p = parser();
+        let jobs = p.parse_jobs(json).unwrap();
         assert!(jobs[0].steps[0].started_at.is_none());
         assert!(jobs[0].steps[0].completed_at.is_none());
     }
@@ -285,31 +307,35 @@ mod tests {
             "startedAt": null, "completedAt": null,
             "url": "https://example.com", "steps": []
         }]}"#;
-        let jobs = parse_jobs(json).unwrap();
+        let p = parser();
+        let jobs = p.parse_jobs(json).unwrap();
         assert!(jobs[0].started_at.is_none());
         assert!(jobs[0].completed_at.is_none());
     }
 
     #[test]
     fn parse_jobs_invalid_wrapper_error() {
-        assert!(parse_jobs(r#"{"not_jobs": []}"#).is_err());
+        let p = parser();
+        assert!(p.parse_jobs(r#"{"not_jobs": []}"#).is_err());
     }
 
     #[test]
     fn process_log_output_no_truncation() {
+        let p = parser();
         let raw = "line 1\nline 2\nline 3";
-        let (text, truncated) = process_log_output(raw, 10);
+        let (text, truncated) = p.process_log_output(raw, 10);
         assert_eq!(text, raw);
         assert!(!truncated);
     }
 
     #[test]
     fn process_log_output_truncates() {
+        let p = parser();
         let raw = (0..20)
             .map(|i| format!("line {}", i))
             .collect::<Vec<_>>()
             .join("\n");
-        let (text, truncated) = process_log_output(&raw, 5);
+        let (text, truncated) = p.process_log_output(&raw, 5);
         assert!(truncated);
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 5);
@@ -319,36 +345,41 @@ mod tests {
 
     #[test]
     fn process_log_output_exact_limit() {
+        let p = parser();
         let raw = "a\nb\nc";
-        let (text, truncated) = process_log_output(raw, 3);
+        let (text, truncated) = p.process_log_output(raw, 3);
         assert_eq!(text, raw);
         assert!(!truncated);
     }
 
     #[test]
     fn process_log_output_empty() {
-        let (text, truncated) = process_log_output("", 10);
+        let p = parser();
+        let (text, truncated) = p.process_log_output("", 10);
         assert_eq!(text, "");
         assert!(!truncated);
     }
 
     #[test]
     fn parse_runs_rejects_oversized_response() {
+        let p = parser();
         let huge = "x".repeat(11 * 1024 * 1024);
-        let err = parse_runs(&huge).unwrap_err();
+        let err = p.parse_runs(&huge).unwrap_err();
         assert!(err.to_string().contains("too large"));
     }
 
     #[test]
     fn parse_jobs_rejects_oversized_response() {
+        let p = parser();
         let huge = "x".repeat(11 * 1024 * 1024);
-        let err = parse_jobs(&huge).unwrap_err();
+        let err = p.parse_jobs(&huge).unwrap_err();
         assert!(err.to_string().contains("too large"));
     }
 
     #[test]
     fn parse_runs_accepts_within_limit() {
+        let p = parser();
         // Valid JSON under the size limit should not trigger the guard
-        assert!(parse_runs("[]").is_ok());
+        assert!(p.parse_runs("[]").is_ok());
     }
 }

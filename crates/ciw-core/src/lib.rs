@@ -17,10 +17,11 @@
 )]
 
 pub mod app;
-pub mod cli;
 pub mod diff;
 pub mod events;
-pub mod gh;
 pub mod input;
 pub mod notify;
+pub mod platform;
+pub mod poller;
+pub mod traits;
 pub mod tui;

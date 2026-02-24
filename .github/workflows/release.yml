@@ -40,15 +40,19 @@ jobs:
 
       - run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Strip binary (Unix)
+      - name: Strip binaries (Unix)
         if: matrix.runner != 'windows-latest'
-        run: strip target/${{ matrix.target }}/release/ghw
+        run: |
+          strip target/${{ matrix.target }}/release/ghw
+          strip target/${{ matrix.target }}/release/glw
 
       - name: Package (tar.gz)
         if: matrix.archive == 'tar.gz'
         run: |
           tar -czf ghw-${{ github.ref_name }}-${{ matrix.target }}.tar.gz \
             -C target/${{ matrix.target }}/release ghw
+          tar -czf glw-${{ github.ref_name }}-${{ matrix.target }}.tar.gz \
+            -C target/${{ matrix.target }}/release glw
 
       - name: Package (zip)
         if: matrix.archive == 'zip'
@@ -56,11 +60,15 @@ jobs:
         run: |
           Compress-Archive -Path target/${{ matrix.target }}/release/ghw.exe `
             -DestinationPath ghw-${{ github.ref_name }}-${{ matrix.target }}.zip
+          Compress-Archive -Path target/${{ matrix.target }}/release/glw.exe `
+            -DestinationPath glw-${{ github.ref_name }}-${{ matrix.target }}.zip
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ghw-${{ matrix.target }}
-          path: ghw-${{ github.ref_name }}-${{ matrix.target }}.*
+          name: binaries-${{ matrix.target }}
+          path: |
+            ghw-${{ github.ref_name }}-${{ matrix.target }}.*
+            glw-${{ github.ref_name }}-${{ matrix.target }}.*
 
   release:
     needs: build
@@ -73,4 +81,6 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: ghw-*
+          files: |
+            ghw-*
+            glw-*

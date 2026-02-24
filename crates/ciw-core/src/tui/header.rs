@@ -9,11 +9,7 @@ use ratatui::Frame;
 pub fn render(f: &mut Frame, area: Rect, state: &AppState) {
     let mut spans = vec![
         Span::styled(
-            format!(
-                " ghw v{}+{} ",
-                env!("CARGO_PKG_VERSION"),
-                env!("BUILD_NUMBER")
-            ),
+            format!(" {} ", state.config.version_string),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),

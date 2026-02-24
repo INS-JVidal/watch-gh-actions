@@ -26,9 +26,9 @@ jobs:
           key: cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: cargo-
 
-      - run: cargo fmt --check
-      - run: cargo test
-      - run: cargo clippy -- -D warnings
+      - run: cargo fmt --all --check
+      - run: cargo test --workspace
+      - run: cargo clippy --workspace -- -D warnings
 
       - name: Cache cargo-deny binary
         id: cache-cargo-deny

@@ -258,6 +258,7 @@ pub struct AppConfig {
     pub branch: Option<String>,
     pub limit: usize,
     pub workflow_filter: Option<String>,
+    pub version_string: String,
 }
 
 pub struct AppState {
@@ -313,6 +314,7 @@ impl AppState {
                 branch,
                 limit,
                 workflow_filter,
+                version_string: String::new(),
             },
             runs: vec![],
             previous_snapshot: HashMap::new(),

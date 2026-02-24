@@ -1,14 +1,16 @@
 use crate::events::AppEvent;
-use crate::gh::{executor, parser};
+use crate::traits::{CiExecutor, CiParser};
+use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 use tokio::time;
 
 const MAX_BACKOFF_SECS: u64 = 300;
 
 pub struct Poller {
-    repo: String,
+    executor: Arc<dyn CiExecutor>,
+    parser: Arc<dyn CiParser>,
     limit: usize,
-    workflow: Option<String>,
+    filter: Option<String>,
     tx: mpsc::UnboundedSender<AppEvent>,
     interval_rx: watch::Receiver<u64>,
 }
@@ -23,16 +25,18 @@ pub fn backoff_delay(base_interval: u64, failures: u32) -> u64 {
 
 impl Poller {
     pub fn new(
-        repo: String,
+        executor: Arc<dyn CiExecutor>,
+        parser: Arc<dyn CiParser>,
         limit: usize,
-        workflow: Option<String>,
+        filter: Option<String>,
         tx: mpsc::UnboundedSender<AppEvent>,
         interval_rx: watch::Receiver<u64>,
     ) -> Self {
         Self {
-            repo,
+            executor,
+            parser,
             limit,
-            workflow,
+            filter,
             tx,
             interval_rx,
         }
@@ -55,7 +59,7 @@ impl Poller {
             } else {
                 base_interval
             };
-            // Wake early if the polling interval changes (e.g. idle → active)
+            // Wake early if the polling interval changes (e.g. idle -> active)
             tokio::select! {
                 () = time::sleep(time::Duration::from_secs(delay)) => {},
                 _ = self.interval_rx.changed() => {},
@@ -83,8 +87,12 @@ impl Poller {
 
     /// Returns the outcome of a single poll attempt.
     async fn poll_once(&self) -> PollOutcome {
-        match executor::fetch_runs(&self.repo, self.limit, self.workflow.as_deref()).await {
-            Ok(json) => match parser::parse_runs(&json) {
+        match self
+            .executor
+            .fetch_runs(self.limit, self.filter.as_deref())
+            .await
+        {
+            Ok(json) => match self.parser.parse_runs(&json) {
                 Ok(runs) => {
                     if self
                         .tx
@@ -125,9 +133,14 @@ enum PollOutcome {
     ChannelClosed,
 }
 
-pub async fn fetch_jobs_for_run(repo: &str, run_id: u64, tx: &mpsc::UnboundedSender<AppEvent>) {
-    match executor::fetch_jobs(repo, run_id).await {
-        Ok(json) => match parser::parse_jobs(&json) {
+pub async fn fetch_jobs_for_run(
+    executor: &dyn CiExecutor,
+    parser: &dyn CiParser,
+    run_id: u64,
+    tx: &mpsc::UnboundedSender<AppEvent>,
+) {
+    match executor.fetch_jobs(run_id).await {
+        Ok(json) => match parser.parse_jobs(&json) {
             Ok(jobs) => {
                 if tx.send(AppEvent::JobsResult { run_id, jobs }).is_err() {
                     tracing::warn!("fetch_jobs: channel closed");
@@ -148,8 +161,8 @@ pub async fn fetch_jobs_for_run(repo: &str, run_id: u64, tx: &mpsc::UnboundedSen
         Err(first_err) => {
             // Single retry after 2s for transient network failures
             time::sleep(time::Duration::from_secs(2)).await;
-            match executor::fetch_jobs(repo, run_id).await {
-                Ok(json) => match parser::parse_jobs(&json) {
+            match executor.fetch_jobs(run_id).await {
+                Ok(json) => match parser.parse_jobs(&json) {
                     Ok(jobs) => {
                         if tx.send(AppEvent::JobsResult { run_id, jobs }).is_err() {
                             tracing::warn!("fetch_jobs: channel closed");

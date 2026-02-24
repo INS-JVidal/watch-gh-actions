@@ -1,11 +1,16 @@
-use ghw::app;
-use ghw::cli;
-use ghw::diff;
-use ghw::events;
-use ghw::gh;
-use ghw::input;
-use ghw::notify;
-use ghw::tui;
+mod cli;
+mod executor;
+mod parser;
+
+use ciw_core::app;
+use ciw_core::diff;
+use ciw_core::events;
+use ciw_core::input;
+use ciw_core::notify;
+use ciw_core::platform::PlatformConfig;
+use ciw_core::poller::{self, Poller};
+use ciw_core::traits::{CiExecutor, CiParser};
+use ciw_core::tui;
 
 use app::AppState;
 use clap::Parser;
@@ -14,14 +19,39 @@ use color_eyre::eyre::{eyre, Result};
 use crossterm::execute;
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen, SetTitle};
 use events::{AppEvent, EventHandler};
-use gh::poller::{self, Poller};
+use executor::GlabExecutor;
 use input::{Action, InputContext, OverlayMode};
+use parser::GlabParser;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::future::Future;
 use std::io;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
+
+const GLW_ART: &[&str] = &[
+    r"            __                                    ",
+    r"          |  \                                    ",
+    r"   ______ | ▓▓__   __   __                        ",
+    r"  /      \| ▓▓  \ |  \ |  \                       ",
+    r" |  ▓▓▓▓▓▓\ ▓▓ ▓▓ | ▓▓ | ▓▓                      ",
+    r" | ▓▓  | ▓▓ ▓▓ ▓▓ | ▓▓ | ▓▓                      ",
+    r" | ▓▓__| ▓▓ ▓▓ ▓▓_/ ▓▓_/ ▓▓                      ",
+    r"  \▓▓    ▓▓ ▓▓\▓▓   ▓▓   ▓▓                      ",
+    r"  _\▓▓▓▓▓▓▓\▓▓ \▓▓▓▓▓\▓▓▓▓                       ",
+    r" |  \__| ▓▓                                       ",
+    r"  \▓▓    ▓▓                                       ",
+    r"   \▓▓▓▓▓▓                                        ",
+];
+
+static GLW_PLATFORM: PlatformConfig = PlatformConfig {
+    name: "pipeline",
+    full_name: "GitLab CI",
+    cli_tool: "GitLab",
+    install_hint: "Install it from https://gitlab.com/gitlab-org/cli",
+    ascii_art: GLW_ART,
+};
 
 fn setup_verbose_logging() -> Result<()> {
     let state_dir = dirs_next_or_fallback();
@@ -38,7 +68,7 @@ fn setup_verbose_logging() -> Result<()> {
         .with_ansi(false)
         .init();
     tracing::info!(
-        "ghw v{} starting with verbose logging",
+        "glw v{} starting with verbose logging",
         env!("CARGO_PKG_VERSION")
     );
     Ok(())
@@ -46,14 +76,14 @@ fn setup_verbose_logging() -> Result<()> {
 
 fn dirs_next_or_fallback() -> std::path::PathBuf {
     if let Some(state) = std::env::var_os("XDG_STATE_HOME") {
-        std::path::PathBuf::from(state).join("ghw")
+        std::path::PathBuf::from(state).join("glw")
     } else if let Some(home) = std::env::var_os("HOME") {
         std::path::PathBuf::from(home)
             .join(".local")
             .join("state")
-            .join("ghw")
+            .join("glw")
     } else {
-        std::path::PathBuf::from("/tmp/ghw")
+        std::path::PathBuf::from("/tmp/glw")
     }
 }
 
@@ -116,8 +146,24 @@ async fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
+    // Create executor and parser for startup (project not yet known)
+    let startup_executor = GlabExecutor::new(String::new());
+    let glab_parser = GlabParser;
+
     // Run startup phases with animated spinner
-    let startup_result = match tui::startup::run_startup(&mut terminal, &args).await {
+    let startup_result = match tui::startup::run_startup(
+        &mut terminal,
+        &GLW_PLATFORM,
+        &startup_executor,
+        &glab_parser,
+        args.project.as_deref(),
+        args.branch.as_deref(),
+        args.limit,
+        args.source.as_deref(),
+        Some(cli::validate_project_format),
+    )
+    .await
+    {
         Ok(result) => result,
         Err(e) => {
             // Restore terminal before printing error
@@ -129,16 +175,27 @@ async fn main() -> Result<()> {
         }
     };
 
-    let repo = startup_result.repo;
-    execute!(io::stdout(), SetTitle(format!("watching {}", repo)))?;
+    let project = startup_result.repo;
+    execute!(io::stdout(), SetTitle(format!("watching {}", project)))?;
     let branch = startup_result.branch;
 
-    let mut state = AppState::new(repo.clone(), branch, args.limit, args.workflow.clone());
+    let version_string = format!(
+        "glw v{}+{}",
+        env!("CARGO_PKG_VERSION"),
+        env!("BUILD_NUMBER")
+    );
+
+    let mut state = AppState::new(project.clone(), branch, args.limit, args.source.clone());
+    state.config.version_string = version_string;
     state.poll_interval = args.interval;
     state.desktop_notify = !args.no_notify;
     state.runs = startup_result.runs;
     state.rebuild_tree();
     state.last_poll = Some(Instant::now());
+
+    // Create the real executor (with project) and parser as Arc trait objects
+    let executor: Arc<dyn CiExecutor> = Arc::new(GlabExecutor::new(project.clone()));
+    let parser: Arc<dyn CiParser> = Arc::new(GlabParser);
 
     // Event handler
     let events = EventHandler::new(Duration::from_millis(100));
@@ -149,14 +206,16 @@ async fn main() -> Result<()> {
 
     // Start poller
     let poller_tx = tx.clone();
-    let poller_repo = repo.clone();
-    let poller_workflow = args.workflow.clone();
+    let poller_executor = executor.clone();
+    let poller_parser = parser.clone();
+    let poller_source = args.source.clone();
     let poller_limit = args.limit;
     let poller_handle = tokio::spawn(async move {
         let poller = Poller::new(
-            poller_repo,
+            poller_executor,
+            poller_parser,
             poller_limit,
-            poller_workflow,
+            poller_source,
             poller_tx,
             interval_rx,
         );
@@ -168,9 +227,10 @@ async fn main() -> Result<()> {
         &mut state,
         events,
         &tx,
-        &repo,
         &interval_tx,
         poller_handle,
+        executor,
+        parser,
     )
     .await;
 
@@ -195,14 +255,16 @@ fn log_overlay_height(terminal: &Terminal<CrosstermBackend<io::Stdout>>) -> usiz
         .saturating_sub(2)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut AppState,
     mut events: EventHandler,
     tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
-    repo: &str,
     interval_tx: &watch::Sender<u64>,
     poller_handle: tokio::task::JoinHandle<()>,
+    executor: Arc<dyn CiExecutor>,
+    parser: Arc<dyn CiParser>,
 ) -> Result<()> {
     let mut last_tick = Instant::now();
     let mut poll_start = Instant::now();
@@ -248,9 +310,16 @@ async fn run_app(
                                     if let Some(run) = state.runs.get(run_idx) {
                                         let run_id = run.database_id;
                                         let tx2 = tx.clone();
-                                        let repo2 = repo.to_string();
+                                        let executor2 = executor.clone();
+                                        let parser2 = parser.clone();
                                         spawn_monitored(tx.clone(), "expand_jobs", async move {
-                                            poller::fetch_jobs_for_run(&repo2, run_id, &tx2).await;
+                                            poller::fetch_jobs_for_run(
+                                                &*executor2,
+                                                &*parser2,
+                                                run_id,
+                                                &tx2,
+                                            )
+                                            .await;
                                         });
                                     }
                                 }
@@ -261,12 +330,13 @@ async fn run_app(
                         Action::Refresh => {
                             state.begin_loading();
                             let tx2 = tx.clone();
-                            let repo2 = repo.to_string();
+                            let executor2 = executor.clone();
+                            let parser2 = parser.clone();
                             let limit = state.config.limit;
                             let wf = state.config.workflow_filter.clone();
                             spawn_monitored(tx.clone(), "refresh", async move {
-                                match gh::executor::fetch_runs(&repo2, limit, wf.as_deref()).await {
-                                    Ok(json) => match gh::parser::parse_runs(&json) {
+                                match executor2.fetch_runs(limit, wf.as_deref()).await {
+                                    Ok(json) => match parser2.parse_runs(&json) {
                                         Ok(runs) => {
                                             if tx2
                                                 .send(AppEvent::PollResult { runs, manual: true })
@@ -300,17 +370,18 @@ async fn run_app(
                                     .and_then(|r| r.conclusion);
                                 if state.current_run_status() != Some(app::RunStatus::Completed) {
                                     state.set_error(
-                                        "Cannot rerun: workflow is still in progress".to_string(),
+                                        "Cannot rerun: pipeline is still in progress".to_string(),
                                     );
                                 } else if run_conclusion == Some(app::Conclusion::Success) {
                                     state.set_error(
-                                        "Run completed successfully — nothing to rerun".to_string(),
+                                        "Pipeline completed successfully — nothing to rerun"
+                                            .to_string(),
                                     );
                                 } else {
-                                    let repo2 = repo.to_string();
+                                    let executor2 = executor.clone();
                                     let tx2 = tx.clone();
                                     spawn_monitored(tx.clone(), "rerun", async move {
-                                        match gh::executor::rerun_workflow(&repo2, run_id).await {
+                                        match executor2.rerun_failed(run_id).await {
                                             Ok(()) => {
                                                 if tx2.send(AppEvent::RerunSuccess(run_id)).is_err()
                                                 {
@@ -334,12 +405,12 @@ async fn run_app(
                             if let Some(run_id) = state.current_run_id() {
                                 if state.current_run_status() != Some(app::RunStatus::InProgress) {
                                     state.set_error(
-                                        "Cannot cancel: run is not in progress".to_string(),
+                                        "Cannot cancel: pipeline is not in progress".to_string(),
                                     );
                                 } else {
                                     let title = state
                                         .current_run_display_title()
-                                        .unwrap_or_else(|| format!("run {run_id}"));
+                                        .unwrap_or_else(|| format!("pipeline {run_id}"));
                                     state.open_confirm_overlay(
                                         "Confirm Cancel".to_string(),
                                         format!("Cancel \"{title}\"?"),
@@ -352,12 +423,12 @@ async fn run_app(
                             if let Some(run_id) = state.current_run_id() {
                                 if state.current_run_status() == Some(app::RunStatus::InProgress) {
                                     state.set_error(
-                                        "Cannot delete: run is still in progress".to_string(),
+                                        "Cannot delete: pipeline is still in progress".to_string(),
                                     );
                                 } else {
                                     let title = state
                                         .current_run_display_title()
-                                        .unwrap_or_else(|| format!("run {run_id}"));
+                                        .unwrap_or_else(|| format!("pipeline {run_id}"));
                                     state.open_confirm_overlay(
                                         "Confirm Delete".to_string(),
                                         format!("Delete \"{title}\"?"),
@@ -371,10 +442,10 @@ async fn run_app(
                                 state.close_confirm_overlay();
                                 match action {
                                     app::ConfirmAction::CancelRun(run_id) => {
-                                        let repo2 = repo.to_string();
+                                        let executor2 = executor.clone();
                                         let tx2 = tx.clone();
                                         spawn_monitored(tx.clone(), "cancel_run", async move {
-                                            match gh::executor::cancel_run(&repo2, run_id).await {
+                                            match executor2.cancel_run(run_id).await {
                                                 Ok(()) => {
                                                     if tx2
                                                         .send(AppEvent::CancelSuccess(run_id))
@@ -399,10 +470,10 @@ async fn run_app(
                                         });
                                     }
                                     app::ConfirmAction::DeleteRun(run_id) => {
-                                        let repo2 = repo.to_string();
+                                        let executor2 = executor.clone();
                                         let tx2 = tx.clone();
                                         spawn_monitored(tx.clone(), "delete_run", async move {
-                                            match gh::executor::delete_run(&repo2, run_id).await {
+                                            match executor2.delete_run(run_id).await {
                                                 Ok(()) => {
                                                     if tx2
                                                         .send(AppEvent::DeleteSuccess(run_id))
@@ -431,7 +502,7 @@ async fn run_app(
                         }
                         Action::OpenBrowser => {
                             if let Some(url) = state.current_run_url() {
-                                if let Err(e) = gh::executor::open_in_browser(url) {
+                                if let Err(e) = executor.open_in_browser(url) {
                                     state.set_error(format!("{e}"));
                                 }
                             }
@@ -471,7 +542,9 @@ async fn run_app(
                                         state.open_log_overlay(title, &content, run_id, job_id);
                                     } else {
                                         let title = build_log_title(state, run_id, job_id);
-                                        fetch_logs_async(repo, run_id, job_id, &title, tx);
+                                        fetch_logs_async(
+                                            &executor, &parser, run_id, job_id, &title, tx,
+                                        );
                                     }
                                 }
                             }
@@ -493,9 +566,11 @@ async fn run_app(
                         }
                         Action::CopyToClipboard => {
                             if let Some(text) = state.log_overlay_text() {
+                                let executor2 = executor.clone();
                                 let tx2 = tx.clone();
                                 spawn_monitored(tx.clone(), "clipboard", async move {
-                                    let result = gh::executor::copy_to_clipboard(&text)
+                                    let result = executor2
+                                        .copy_to_clipboard(&text)
                                         .await
                                         .map_err(|e| format!("{e}"));
                                     if tx2.send(AppEvent::ClipboardResult(result)).is_err() {
@@ -629,7 +704,7 @@ async fn run_app(
                                 if old.updated_at == run.updated_at {
                                     run.jobs = old.jobs.clone();
                                 } else if state.expanded_runs.contains(&run.database_id) {
-                                    // Run changed and is expanded — re-fetch jobs
+                                    // Run changed and is expanded -- re-fetch jobs
                                     refetch_run_ids.push(run.database_id);
                                 }
                             }
@@ -659,9 +734,10 @@ async fn run_app(
                     // Re-fetch jobs for expanded runs whose data has changed
                     for run_id in refetch_run_ids {
                         let tx2 = tx.clone();
-                        let repo2 = repo.to_string();
+                        let executor2 = executor.clone();
+                        let parser2 = parser.clone();
                         spawn_monitored(tx.clone(), "refetch_jobs", async move {
-                            poller::fetch_jobs_for_run(&repo2, run_id, &tx2).await;
+                            poller::fetch_jobs_for_run(&*executor2, &*parser2, run_id, &tx2).await;
                         });
                     }
                 }
@@ -696,7 +772,7 @@ async fn run_app(
                     }
                 },
                 AppEvent::CancelSuccess(run_id) => {
-                    state.add_notification(run_id, "Run cancelled".to_string());
+                    state.add_notification(run_id, "Pipeline cancelled".to_string());
                     // Trigger a refresh to pick up the new status
                     poll_start = Instant::now()
                         .checked_sub(Duration::from_secs(state.poll_interval))
@@ -704,11 +780,11 @@ async fn run_app(
                 }
                 AppEvent::DeleteSuccess(run_id) => {
                     state.remove_run(run_id);
-                    state.add_notification(run_id, "Run deleted".to_string());
+                    state.add_notification(run_id, "Pipeline deleted".to_string());
                 }
                 AppEvent::RerunSuccess(run_id) => {
                     state.log_cache.retain(|(r, _), _| *r != run_id);
-                    state.add_notification(run_id, "Rerun triggered".to_string());
+                    state.add_notification(run_id, "Retry triggered".to_string());
                 }
                 AppEvent::RunError { run_id, error } => {
                     state.run_errors.insert(run_id, error);
@@ -748,7 +824,7 @@ fn build_detail_lines(
 ) -> (String, Vec<(String, String)>) {
     match resolved {
         app::ResolvedItem::Run(run) => {
-            let title = format!("Run #{}", run.number);
+            let title = format!("Pipeline #{}", run.number);
             let conclusion_str = run.conclusion.map_or("-".into(), |c| format!("{c:?}"));
             let end = if run.status == app::RunStatus::Completed {
                 Some(run.updated_at)
@@ -758,9 +834,9 @@ fn build_detail_lines(
             let duration = app::compute_duration(Some(run.created_at), end);
             let lines = vec![
                 ("Title".into(), run.display_title.clone()),
-                ("Workflow".into(), run.name.clone()),
+                ("Source".into(), run.name.clone()),
                 ("Branch".into(), run.head_branch.clone()),
-                ("Event".into(), run.event.clone()),
+                ("Source".into(), run.event.clone()),
                 ("Status".into(), format!("{:?}", run.status)),
                 ("Conclusion".into(), conclusion_str),
                 ("Duration".into(), duration),
@@ -806,10 +882,10 @@ fn build_detail_lines(
                 lines.push(("Duration".into(), label));
             }
             lines.push(("URL".into(), job.url.clone()));
-            // Show parent run info
+            // Show parent pipeline info
             if let Some(run) = state.runs.get(run_idx) {
                 lines.push((
-                    "Run".into(),
+                    "Pipeline".into(),
                     format!("#{} {}", run.number, run.display_title),
                 ));
             }
@@ -851,25 +927,26 @@ fn build_detail_lines(
 }
 
 fn fetch_logs_async(
-    repo: &str,
+    executor: &Arc<dyn CiExecutor>,
+    parser: &Arc<dyn CiParser>,
     run_id: u64,
     job_id: Option<u64>,
     title: &str,
     tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
 ) {
-    let repo = repo.to_string();
+    let executor = executor.clone();
+    let parser = parser.clone();
     let title = title.to_string();
     let tx2 = tx.clone();
     spawn_monitored(tx.clone(), "fetch_logs", async move {
         let result = if let Some(jid) = job_id {
-            gh::executor::fetch_failed_logs_for_job(&repo, run_id, jid).await
+            executor.fetch_failed_logs_for_job(run_id, jid).await
         } else {
-            gh::executor::fetch_failed_logs(&repo, run_id).await
+            executor.fetch_failed_logs(run_id).await
         };
         match result {
             Ok(raw) => {
-                let (content, _truncated) =
-                    gh::parser::process_log_output(&raw, app::LOG_MAX_LINES);
+                let (content, _truncated) = parser.process_log_output(&raw, app::LOG_MAX_LINES);
                 let content = if content.trim().is_empty() {
                     "(no failed step logs available)".to_string()
                 } else {
