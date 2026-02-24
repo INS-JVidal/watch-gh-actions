@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 280" width="700" height="280">
+  <defs>
+    <style>
+      text {
+        font-family: 'Consolas', 'Courier New', 'Liberation Mono', 'DejaVu Sans Mono', monospace;
+        font-size: 16px;
+        white-space: pre;
+      }
+    </style>
+  </defs>
+  <rect width="700" height="280" rx="8" fill="#1a1a2e"/>
+  <g xml:space="preserve">
+    <!-- ghw: Red (255,0,0) → Magenta (220,0,155) → Violet (136,0,255) -->
+    <text x="25" y="35" fill="rgb(255,0,0)">            __</text>
+    <text x="25" y="55" fill="rgb(249,0,28)">          |  \</text>
+    <text x="25" y="75" fill="rgb(242,0,56)">   ______ | ▓▓____  __   __   __</text>
+    <text x="25" y="95" fill="rgb(236,0,85)">  /      \| ▓▓    \|  \ |  \ |  \</text>
+    <text x="25" y="115" fill="rgb(230,0,113)"> |  ▓▓▓▓▓▓\ ▓▓▓▓▓▓▓\ ▓▓ | ▓▓ | ▓▓</text>
+    <text x="25" y="135" fill="rgb(223,0,141)"> | ▓▓  | ▓▓ ▓▓  | ▓▓ ▓▓ | ▓▓ | ▓▓</text>
+    <text x="25" y="155" fill="rgb(212,0,164)"> | ▓▓__| ▓▓ ▓▓  | ▓▓ ▓▓_/ ▓▓_/ ▓▓</text>
+    <text x="25" y="175" fill="rgb(197,0,182)">  \▓▓    ▓▓ ▓▓  | ▓▓\▓▓   ▓▓   ▓▓</text>
+    <text x="25" y="195" fill="rgb(182,0,201)">  _\▓▓▓▓▓▓▓\▓▓   \▓▓ \▓▓▓▓▓\▓▓▓▓</text>
+    <text x="25" y="215" fill="rgb(167,0,219)"> |  \__| ▓▓</text>
+    <text x="25" y="235" fill="rgb(151,0,237)">  \▓▓    ▓▓</text>
+    <text x="25" y="255" fill="rgb(136,0,255)">   \▓▓▓▓▓▓</text>
+    <!-- glw: Lime (80,255,0) → Teal (40,178,128) → Electric blue (0,100,255) -->
+    <text x="380" y="35" fill="rgb(80,255,0)">            __</text>
+    <text x="380" y="55" fill="rgb(73,241,23)">          |  \</text>
+    <text x="380" y="75" fill="rgb(66,227,47)">   ______ | ▓▓__   __   __</text>
+    <text x="380" y="95" fill="rgb(58,213,70)">  /      \| ▓▓  \ |  \ |  \</text>
+    <text x="380" y="115" fill="rgb(51,199,93)"> |  ▓▓▓▓▓▓\ ▓▓ ▓▓ | ▓▓ | ▓▓</text>
+    <text x="380" y="135" fill="rgb(44,185,116)"> | ▓▓  | ▓▓ ▓▓ ▓▓ | ▓▓ | ▓▓</text>
+    <text x="380" y="155" fill="rgb(36,171,140)"> | ▓▓__| ▓▓ ▓▓ ▓▓_/ ▓▓_/ ▓▓</text>
+    <text x="380" y="175" fill="rgb(29,157,163)">  \▓▓    ▓▓ ▓▓\▓▓   ▓▓   ▓▓</text>
+    <text x="380" y="195" fill="rgb(22,143,186)">  _\▓▓▓▓▓▓▓\▓▓ \▓▓▓▓▓\▓▓▓▓</text>
+    <text x="380" y="215" fill="rgb(15,128,209)"> |  \__| ▓▓</text>
+    <text x="380" y="235" fill="rgb(7,114,232)">  \▓▓    ▓▓</text>
+    <text x="380" y="255" fill="rgb(0,100,255)">   \▓▓▓▓▓▓</text>
+  </g>
+</svg>

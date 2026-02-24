@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="CI Watcher" width="700">
+</p>
+
 # CI Watcher
 
 Terminal UI for monitoring CI/CD pipelines. Supports **GitHub Actions** (`ghw`) and **GitLab CI** (`glw`).
