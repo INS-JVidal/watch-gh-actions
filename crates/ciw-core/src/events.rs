@@ -1,12 +1,8 @@
-//! Event system: terminal input thread and application event channel.
+//! Terminal input thread and application event channel.
 //!
-//! [`EventHandler`] spawns a dedicated OS thread — not a tokio task — because
-//! `crossterm::event::poll()` is a blocking syscall that would starve the async
-//! runtime. All events (terminal input, poll results, async task completions) flow
-//! through a single `tokio::sync::mpsc::unbounded_channel` consumed by `run_app()`.
-//!
-//! The `Drop` impl only signals the shutdown flag without joining the thread, to
-//! avoid deadlocking if `crossterm::poll` is blocked during panic unwinding.
+//! [`EventHandler`] spawns an OS thread (not tokio task) because `crossterm::event::poll()`
+//! blocks and would starve the async runtime. Drop signals shutdown without joining
+//! to avoid deadlocking if `poll` blocks during panic unwinding.
 
 use crate::app::Job;
 use crate::app::WorkflowRun;
@@ -40,14 +36,12 @@ pub enum AppEvent {
     RerunSuccess(u64),
     CancelSuccess(u64),
     DeleteSuccess(u64),
-    /// Per-run error (e.g., job-fetch failure). Shown as a ⚠ icon on that run's tree
-    /// row. Does NOT auto-dismiss — persists until the run is refreshed or removed.
+    /// Per-run ⚠ icon. Persists until run is refreshed. Use for job-fetch failures etc.
     RunError {
         run_id: u64,
         error: String,
     },
-    /// Global error toast at the bottom of the screen. Auto-dismisses after
-    /// `ERROR_TTL_SECS` (10s). Use `RunError` for errors tied to a specific run.
+    /// Global toast, auto-dismisses after `ERROR_TTL_SECS`. Use `RunError` for per-run.
     Error(String),
 }
 

@@ -1,14 +1,11 @@
 //! Change detection between polling cycles.
 //!
-//! Uses a merge-based snapshot design: `AppState::previous_snapshot` retains entries
-//! for `SNAPSHOT_EVICTION_POLLS` polls after a run disappears from the API response.
-//! This prevents false-positive "started" notifications when runs scroll out of the
-//! `--limit` window and reappear on a later poll.
+//! Snapshot entries persist after a run disappears from the API — prevents false
+//! "started" notifications when runs scroll out of `--limit` and reappear later.
 
 use crate::app::{AppState, Notification, RunStatus, SnapshotEntry, WorkflowRun};
 
-/// Maximum number of polls a run can be absent before being evicted from the snapshot.
-/// At the default 3s interval this is ~30s; with adaptive backoff (up to 30s) it's ~5 min.
+/// Polls absent before eviction. ~30s at 3s interval, ~5min at 30s idle interval.
 const SNAPSHOT_EVICTION_POLLS: u64 = 10;
 
 pub fn detect_changes(state: &mut AppState, new_runs: &[WorkflowRun]) {

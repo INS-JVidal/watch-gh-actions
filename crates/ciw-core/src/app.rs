@@ -1,9 +1,4 @@
 //! Application data model, state management, and tree navigation.
-//!
-//! The tree is a flat `Vec<TreeItem>` rebuilt from scratch on every state change via
-//! [`AppState::rebuild_tree`]. Each item stores indices into the `runs` vector rather
-//! than cloning data. Full rebuild (vs incremental) is simpler and fast enough for the
-//! typical scale (~20 runs × ~10 jobs each = negligible cost).
 
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -70,32 +65,27 @@ pub struct SnapshotEntry {
     pub last_seen_poll: u64,
 }
 
-/// GitHub Actions updates run status roughly every 2s; 3s catches most transitions
-/// within one poll cycle without hammering the API.
+/// GitHub updates status ~every 2s; 3s catches most transitions in one cycle.
 pub const POLL_INTERVAL_ACTIVE: u64 = 3;
-/// After a run completes, a rapid re-trigger (push fix, rerun) is common.
-/// 10s catches it without active-polling overhead.
+/// Catches rapid re-triggers after completion without active-polling cost.
 pub const POLL_INTERVAL_RECENT: u64 = 10;
-/// When nothing is active. Low enough to detect new pushes within half a minute;
-/// high enough to stay well within API rate limits.
+/// Detects new pushes within 30s; well within API rate limits.
 pub const POLL_INTERVAL_IDLE: u64 = 30;
-/// A run that completed within this window is "recent" — triggers the intermediate
-/// polling rate. 60s covers the typical "run failed → user pushes a fix" cycle.
+/// "Recent" = completed within 60s. Covers typical "fail → push fix" cycle.
 pub const POLL_RECENT_THRESHOLD_SECS: u64 = 60;
 
 pub const NOTIFICATION_TTL_SECS: u64 = 5;
 /// Must match the length of `BRAILLE_FRAMES` in `tui::spinner`.
 pub const SPINNER_FRAME_COUNT: usize = 10;
 pub const QUICK_SELECT_MAX: usize = 9;
-/// Below 60 columns, branch names and full key hints don't fit — triggers compact layout.
+/// Below 60 cols, branch names and key hints don't fit — triggers compact layout.
 pub const NARROW_WIDTH_THRESHOLD: u16 = 60;
-/// Long enough to read an error; short enough to not permanently obscure the tree.
+/// Long enough to read; short enough to not permanently obscure the tree.
 pub const ERROR_TTL_SECS: u64 = 10;
 
-/// Truncation keeps the tail (most relevant for debugging failed CI).
-/// 500 lines prevents OOM on massive log output while still showing enough context.
+/// Keeps tail (most relevant for debugging). Prevents OOM on huge logs.
 pub const LOG_MAX_LINES: usize = 500;
-/// Long enough to re-open without re-fetching; short enough to get fresh data after rerun.
+/// Re-open without re-fetch, but get fresh data after rerun.
 pub const LOG_CACHE_TTL_SECS: u64 = 120;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Deserialize)]
@@ -188,10 +178,8 @@ pub enum TreeLevel {
     Loading,
 }
 
-/// An entry in the flat tree representation. Stores indices into `AppState::runs`
-/// (and nested `jobs`/`steps`), **not** cloned data. All indices are invalidated by
-/// any mutation to `runs` — that's why `rebuild_tree()` must be called after every
-/// state change, never incrementally patched.
+/// Stores indices into `runs`/`jobs`/`steps`, **not** data. Invalidated by any
+/// mutation to `runs` — call `rebuild_tree()` after every state change.
 #[derive(Debug, Clone)]
 pub struct TreeItem {
     pub level: TreeLevel,
@@ -270,8 +258,7 @@ pub enum ConfirmAction {
     DeleteRun(u64),
 }
 
-/// At most one overlay active at a time — the enum shape enforces this (not a stack).
-/// Opening a new overlay replaces the previous one.
+/// At most one overlay active at a time (not a stack). New overlay replaces previous.
 pub enum ActiveOverlay {
     None,
     Log(LogOverlay),
@@ -293,9 +280,8 @@ pub struct AppState {
 
     // Run data
     pub runs: Vec<WorkflowRun>,
-    /// Merge-based cache for change detection. Entries persist for
-    /// `SNAPSHOT_EVICTION_POLLS` after disappearing from the API response to
-    /// prevent false "started" notifications when runs scroll out of `--limit`.
+    /// Entries persist after disappearing from API to prevent false notifications
+    /// when runs scroll out of `--limit`. Evicted after `SNAPSHOT_EVICTION_POLLS`.
     pub previous_snapshot: HashMap<u64, SnapshotEntry>,
     pub poll_count: u64,
 

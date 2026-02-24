@@ -24,6 +24,8 @@ impl GlabExecutor {
     }
 }
 
+/// Uses `glab api` (raw REST) instead of `glab ci` subcommands because `glab ci`
+/// doesn't expose cancel, delete, or per-job trace endpoints.
 #[async_trait]
 impl CiExecutor for GlabExecutor {
     async fn check_available(&self) -> Result<()> {
@@ -110,8 +112,7 @@ impl CiExecutor for GlabExecutor {
         Ok(())
     }
 
-    /// Multi-step because GitLab has no `--log-failed` equivalent (unlike `gh`).
-    /// Must: fetch all jobs → filter for failed status → fetch each job's trace endpoint.
+    /// Multi-step because GitLab has no `--log-failed` equivalent.
     async fn fetch_failed_logs(&self, pipeline_id: u64) -> Result<String> {
         // 1. Fetch jobs for this pipeline
         let jobs_json = self.fetch_jobs(pipeline_id).await?;

@@ -87,9 +87,8 @@ fn dirs_next_or_fallback() -> std::path::PathBuf {
     }
 }
 
-/// Double-spawn pattern: the outer task catches panics from the inner task and
-/// converts them into `AppEvent::Error`. Without this, a panicking background task
-/// (poller, job fetch, log fetch) would die silently with no user feedback.
+/// Outer task catches inner panics → `AppEvent::Error`. Without this, background
+/// task panics die silently.
 fn spawn_monitored(
     tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
     label: &'static str,

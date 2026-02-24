@@ -1,13 +1,7 @@
-//! Platform abstraction traits for CI systems.
+//! Platform abstraction traits for CI systems (GitHub Actions / GitLab CI).
 //!
-//! [`CiExecutor`] and [`CiParser`] define the boundary between the shared library
-//! and each binary crate (ghw, glw). The library only ever sees `Arc<dyn CiExecutor>`
-//! / `Arc<dyn CiParser>` — it never imports a concrete implementation.
-//!
-//! Both traits require `Send + Sync` because the executor and parser are shared via
-//! `Arc` between the main event loop thread and spawned background tasks (poller,
-//! job fetcher, log fetcher). Implementors typically store only an immutable identifier
-//! string (repo path or project path), so this is trivially satisfied.
+//! The library only sees `Arc<dyn CiExecutor>` / `Arc<dyn CiParser>` — concrete
+//! implementations live in each binary crate.
 
 use crate::app::{Job, WorkflowRun};
 use async_trait::async_trait;
@@ -15,14 +9,9 @@ use color_eyre::eyre::Result;
 
 /// Side-effecting operations against a CI platform's CLI tool.
 ///
-/// All `&self` — implementors hold only an immutable repo/project identifier.
-/// Fetch methods return raw JSON strings rather than parsed types: this keeps
-/// parsing responsibility in [`CiParser`], making it easy to add size validation
-/// before parsing and to test executor and parser independently.
-///
-/// Errors should be human-readable — the main loop displays them directly in the
-/// TUI error toast. Implementors should classify common failures (auth, missing CLI,
-/// network timeout) into actionable messages.
+/// Fetch methods return raw JSON strings — parsing stays in [`CiParser`] so the
+/// two can be tested and validated independently. Errors are displayed directly
+/// in the TUI toast, so implementors should return actionable messages.
 #[async_trait]
 pub trait CiExecutor: Send + Sync {
     async fn check_available(&self) -> Result<()>;
@@ -46,10 +35,7 @@ pub trait CiExecutor: Send + Sync {
 }
 
 /// Deserializes platform-specific JSON into the shared data model.
-///
-/// Sync (not async) — parsing is CPU-bound with no I/O. Each CI platform returns
-/// differently-structured JSON; implementors map it into the common [`WorkflowRun`]
-/// and [`Job`] types.
+/// Sync — parsing is CPU-bound, no I/O.
 pub trait CiParser: Send + Sync {
     fn parse_runs(&self, json: &str) -> Result<Vec<WorkflowRun>>;
     fn parse_jobs(&self, json: &str) -> Result<Vec<Job>>;

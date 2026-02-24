@@ -49,11 +49,8 @@ pub struct InputContext {
     pub overlay: OverlayMode,
 }
 
-/// Map a key press to a semantic action, respecting the current UI context.
-///
-/// Priority: Ctrl+C always quits → overlay-specific keys (log scroll, confirm y/n,
-/// detail close) → error dismissal → default-mode keys (navigation, actions, digits).
-/// This layering means overlays "capture" keys without leaking to the tree underneath.
+/// Priority: Ctrl+C → overlay keys → error dismissal → default keys.
+/// Overlays capture keys without leaking to the tree underneath.
 pub fn map_key(key: KeyEvent, ctx: &InputContext) -> Action {
     let has_log_overlay = ctx.overlay == OverlayMode::Log;
     let has_detail_overlay = ctx.overlay == OverlayMode::Detail;
