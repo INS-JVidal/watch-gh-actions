@@ -87,6 +87,9 @@ fn dirs_next_or_fallback() -> std::path::PathBuf {
     }
 }
 
+/// Double-spawn pattern: the outer task catches panics from the inner task and
+/// converts them into `AppEvent::Error`. Without this, a panicking background task
+/// (poller, job fetch, log fetch) would die silently with no user feedback.
 fn spawn_monitored(
     tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
     label: &'static str,
@@ -692,7 +695,10 @@ async fn run_app(
                         }
                     }
 
-                    // Preserve jobs data for runs that haven't changed
+                    // Carry forward existing job data so expanded runs keep their
+                    // children across poll cycles (poll only returns runs, not jobs).
+                    // If a run's `updated_at` changed, its job data is stale — discard
+                    // it and re-fetch if the run is currently expanded.
                     let mut runs = new_runs;
                     let mut refetch_run_ids = Vec::new();
                     for run in &mut runs {

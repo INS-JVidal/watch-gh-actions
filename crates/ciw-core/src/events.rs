@@ -1,3 +1,13 @@
+//! Event system: terminal input thread and application event channel.
+//!
+//! [`EventHandler`] spawns a dedicated OS thread — not a tokio task — because
+//! `crossterm::event::poll()` is a blocking syscall that would starve the async
+//! runtime. All events (terminal input, poll results, async task completions) flow
+//! through a single `tokio::sync::mpsc::unbounded_channel` consumed by `run_app()`.
+//!
+//! The `Drop` impl only signals the shutdown flag without joining the thread, to
+//! avoid deadlocking if `crossterm::poll` is blocked during panic unwinding.
+
 use crate::app::Job;
 use crate::app::WorkflowRun;
 use crossterm::event::{self, Event as CrosstermEvent, KeyEvent};
@@ -13,6 +23,7 @@ pub enum AppEvent {
     Tick,
     PollResult {
         runs: Vec<WorkflowRun>,
+        /// `true` when user pressed 'r' (shows immediate feedback vs background refresh).
         manual: bool,
     },
     JobsResult {
@@ -29,10 +40,14 @@ pub enum AppEvent {
     RerunSuccess(u64),
     CancelSuccess(u64),
     DeleteSuccess(u64),
+    /// Per-run error (e.g., job-fetch failure). Shown as a ⚠ icon on that run's tree
+    /// row. Does NOT auto-dismiss — persists until the run is refreshed or removed.
     RunError {
         run_id: u64,
         error: String,
     },
+    /// Global error toast at the bottom of the screen. Auto-dismisses after
+    /// `ERROR_TTL_SECS` (10s). Use `RunError` for errors tied to a specific run.
     Error(String),
 }
 

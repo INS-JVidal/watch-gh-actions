@@ -1,3 +1,10 @@
+//! Animated multi-phase startup screen.
+//!
+//! Each phase (check CLI, detect repo, detect branch, fetch runs) is driven by
+//! `tokio::select!` to run the async future concurrently with an 80ms spinner tick,
+//! re-rendering the startup screen on each tick so the animation stays smooth even
+//! during slow network calls.
+
 use crate::app::WorkflowRun;
 use crate::platform::PlatformConfig;
 use crate::traits::{CiExecutor, CiParser};

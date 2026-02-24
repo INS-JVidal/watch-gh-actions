@@ -1,3 +1,13 @@
+//! Main tree view: renders the run/job/step hierarchy as a flat scrollable list.
+//!
+//! The tree is rendered from `AppState::tree_items` — a pre-computed flat list where
+//! each item stores indices back into `runs`/`jobs`/`steps`. Scrolling is cursor-following:
+//! the visible window slides so the cursor row is always within the viewport.
+//!
+//! Each line shows: quick-select digit (1-9), expand/collapse arrow, status icon
+//! (Unicode: checkmark/cross/spinner/dot), name (unicode-width-truncated), and duration.
+//! On wide terminals, runs also show branch name and notification/error markers.
+
 use crate::app::{self, AppState, Conclusion, ResolvedItem, RunStatus, TreeLevel};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};

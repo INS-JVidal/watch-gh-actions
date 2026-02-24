@@ -50,6 +50,10 @@ struct GlabJob {
     web_url: String,
 }
 
+/// GitLab uses a single `status` field where GitHub uses `status` + `conclusion`.
+/// These two functions split GitLab's flat status into the two-dimensional model:
+/// `map_status` determines if the run is finished/active/pending, while
+/// `map_conclusion` extracts the outcome (only meaningful for terminal statuses).
 fn map_status(status: &str) -> RunStatus {
     match status {
         "success" | "failed" | "canceled" | "skipped" => RunStatus::Completed,

@@ -1,3 +1,10 @@
+//! Change detection between polling cycles.
+//!
+//! Uses a merge-based snapshot design: `AppState::previous_snapshot` retains entries
+//! for `SNAPSHOT_EVICTION_POLLS` polls after a run disappears from the API response.
+//! This prevents false-positive "started" notifications when runs scroll out of the
+//! `--limit` window and reappear on a later poll.
+
 use crate::app::{AppState, Notification, RunStatus, SnapshotEntry, WorkflowRun};
 
 /// Maximum number of polls a run can be absent before being evicted from the snapshot.

@@ -1,9 +1,22 @@
+//! Background polling loop with adaptive interval and exponential backoff.
+//!
+//! The polling interval is controlled externally via a `watch::Receiver<u64>` — the
+//! main event loop writes new intervals when activity changes (3s active → 10s recent
+//! → 30s idle), and the poller picks up the change on its next `tokio::select!` cycle
+//! without needing to be restarted.
+//!
+//! On consecutive failures, exponential backoff (`base × 2^failures`) is applied up
+//! to `MAX_BACKOFF_SECS` (5 minutes). The backoff resets to the base interval on the next
+//! successful poll.
+
 use crate::events::AppEvent;
 use crate::traits::{CiExecutor, CiParser};
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 use tokio::time;
 
+/// 5 minutes — the longest a user should wait between automatic retries. Beyond this,
+/// the error toast has been visible long enough for them to investigate manually.
 const MAX_BACKOFF_SECS: u64 = 300;
 
 pub struct Poller {

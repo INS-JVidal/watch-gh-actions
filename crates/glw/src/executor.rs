@@ -110,6 +110,8 @@ impl CiExecutor for GlabExecutor {
         Ok(())
     }
 
+    /// Multi-step because GitLab has no `--log-failed` equivalent (unlike `gh`).
+    /// Must: fetch all jobs → filter for failed status → fetch each job's trace endpoint.
     async fn fetch_failed_logs(&self, pipeline_id: u64) -> Result<String> {
         // 1. Fetch jobs for this pipeline
         let jobs_json = self.fetch_jobs(pipeline_id).await?;
