@@ -20,7 +20,10 @@ impl GhExecutor {
 #[async_trait]
 impl CiExecutor for GhExecutor {
     async fn check_available(&self) -> Result<()> {
-        run_gh(&["auth", "status"]).await.map(|_| ())
+        // Use `gh auth token` instead of `gh auth status` — the latter exits 1
+        // if *any* account (even inactive) has a stale token, even when the
+        // active account works fine.
+        run_gh(&["auth", "token"]).await.map(|_| ())
     }
 
     async fn detect_repo(&self) -> Result<String> {
@@ -313,7 +316,13 @@ async fn copy_to_clipboard_impl(text: &str) -> Result<()> {
 }
 
 pub fn classify_gh_error(stderr: &str) -> String {
-    if stderr.contains("not logged") || stderr.contains("auth login") {
+    if stderr.contains("token") && stderr.contains("invalid") {
+        // Stale account with expired/invalid token — suggest removing it
+        "A gh account has an invalid token.\n  \
+         Run `gh auth status` to identify it, then:\n  \
+         gh auth logout -h github.com -u <stale-username>"
+            .to_string()
+    } else if stderr.contains("not logged") || stderr.contains("auth login") {
         "Not authenticated with gh. Run `gh auth login` first.".to_string()
     } else if stderr.contains("not a git repository") || stderr.contains("could not determine") {
         "Not in a GitHub repository. Use --repo flag or cd into a repo.".to_string()
